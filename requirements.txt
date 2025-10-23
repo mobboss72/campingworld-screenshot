@@ -1,2 +1,7 @@
-Flask
-playwright
+Flask==3.1.2
+gunicorn==22.0.0
+playwright==1.55.0
+pillow==10.4.0
+requests==2.32.3
+reportlab==4.2.5
+rfc3161ng==2.1.2
