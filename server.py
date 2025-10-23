@@ -9,8 +9,9 @@ import tempfile
 import traceback
 import requests
 import base64
+from pathlib import Path
 
-from flask import Flask, request, send_from_directory, Response, render_template_string
+from flask import Flask, request, send_from_directory, Response, render_template_string, send_file
 from playwright.sync_api import sync_playwright
 
 # Set Playwright browsers path to a writable, persisted location under /app
@@ -19,6 +20,9 @@ os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 PORT = int(os.getenv("PORT", "8080"))
 OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
 
+# Global storage for screenshot paths (in production, use a database)
+screenshot_cache = {}
+
 # Serve index.html from the repo root
 app = Flask(__name__, static_folder=None)
 
@@ -26,6 +30,18 @@ app = Flask(__name__, static_folder=None)
 @app.get("/")
 def root():
     return send_from_directory(".", "index.html")
+
+@app.get("/screenshot/<screenshot_id>")
+def serve_screenshot(screenshot_id):
+    """Serve a screenshot image file"""
+    if screenshot_id not in screenshot_cache:
+        return Response("Screenshot not found", status=404)
+    
+    file_path = screenshot_cache[screenshot_id]
+    if not os.path.exists(file_path):
+        return Response("Screenshot file not found", status=404)
+    
+    return send_file(file_path, mimetype='image/png')
 
 @app.post("/capture")
 def capture():
@@ -57,12 +73,14 @@ def capture():
         sha_price = sha256_file(price_png_path) if price_exists else "N/A (Capture failed)"
         sha_payment = sha256_file(payment_png_path) if payment_exists else "N/A (Capture failed)"
 
-        # Render template with images side by side, handling missing files
-        price_base64 = encode_image_to_base64(price_png_path) if price_exists else ""
-        payment_base64 = encode_image_to_base64(payment_png_path) if payment_exists else ""
+        # Store paths in cache for serving
+        price_id = f"price_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
+        payment_id = f"payment_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
         
-        print(f"Price base64 length: {len(price_base64)}")
-        print(f"Payment base64 length: {len(payment_base64)}")
+        if price_exists:
+            screenshot_cache[price_id] = price_png_path
+        if payment_exists:
+            screenshot_cache[payment_id] = payment_png_path
 
         html = render_template_string('''
             <!DOCTYPE html>
@@ -140,8 +158,8 @@ def capture():
                     <div class="image-box">
                         <h3>Price Hover Full Page Screenshot</h3>
                         <div class="screenshot-container">
-                            {% if price_base64 %}
-                                <img src="image/png;base64,{{ price_base64 }}" alt="Price Hover Full Page" />
+                            {% if price_exists %}
+                                <img src="/screenshot/{{ price_id }}" alt="Price Hover Full Page" />
                                 <p class="success">✓ Screenshot captured successfully</p>
                             {% else %}
                                 <p class="error">✗ Failed to capture Price Hover screenshot.</p>
@@ -152,14 +170,14 @@ def capture():
                             <p><strong>URL:</strong> <a href="{{ url }}" target="_blank">{{ url }}</a></p>
                             <p><strong>UTC:</strong> {{ utc_now }}</p>
                             <p><strong>HTTPS Date:</strong> {{ hdate or 'unavailable' }}</p>
-                            <p><strong>SHA-256:</strong> <code>{{ sha_price }}</code></p>
+                            <p><strong>SHA-256:</strong> odede>{{ sha_price }}</code></p>
                         </div>
                     </div>
                     <div class="image-box">
                         <h3>Payment Hover Full Page Screenshot</h3>
                         <div class="screenshot-container">
-                            {% if payment_base64 %}
-                                <img src="image/png;base64,{{ payment_base64 }}" alt="Payment Hover Full Page" />
+                            {% if payment_exists %}
+                                <img src="/screenshot/{{ payment_id }}" alt="Payment Hover Full Page" />
                                 <p class="success">✓ Screenshot captured successfully</p>
                             {% else %}
                                 <p class="error">✗ Failed to capture Payment Hover screenshot.</p>
@@ -181,8 +199,10 @@ def capture():
         url=url, 
         utc_now=utc_now, 
         hdate=hdate,
-        price_base64=price_base64,
-        payment_base64=payment_base64,
+        price_exists=price_exists,
+        payment_exists=payment_exists,
+        price_id=price_id,
+        payment_id=payment_id,
         sha_price=sha_price,
         sha_payment=sha_payment)
 
@@ -215,24 +235,6 @@ def https_date() -> str | None:
         return r.headers.get("Date")
     except Exception:
         return None
-
-def encode_image_to_base64(path: str) -> str:
-    """Encode image file to base64 string"""
-    if not os.path.exists(path):
-        print(f"Warning: Image file not found at {path}")
-        return ""
-    try:
-        with open(path, "rb") as image_file:
-            image_data = image_file.read()
-            if len(image_data) == 0:
-                print(f"Warning: Image file is empty at {path}")
-                return ""
-            encoded = base64.b64encode(image_data).decode('utf-8')
-            print(f"Successfully encoded image: {len(encoded)} characters")
-            return encoded
-    except Exception as e:
-        print(f"Error encoding image to base64: {e}")
-        return ""
 
 def do_capture(stock: str) -> tuple[str, str, str]:
     """Capture price and payment hover screenshots"""
