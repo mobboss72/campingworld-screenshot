@@ -1,6 +1,6 @@
 [build]
-# Install Python dependencies and Playwright browsers during build phase
-buildCommand = "mkdir -p /tmp/ms-playwright && pip install -r requirements.txt && python -m playwright install --with-deps chromium"
+# Install Python dependencies and Playwright browsers during build phase, with env var set for path
+buildCommand = "mkdir -p /app/ms-playwright && pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright python -m playwright install --with-deps chromium"
 
 [start]
 # Start Gunicorn with sufficient timeout for Playwright operations
