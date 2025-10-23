@@ -66,7 +66,7 @@ def capture():
                     <div class="image-box">
                         <h3>Price Hover Full Page Screenshot</h3>
                         {% if price_base64 %}
-                            <img src="data:image/png;base64,{{ price_base64 }}" alt="Price Hover Full Page">
+                            <img src="image/png;base64,{{ price_base64 }}" alt="Price Hover Full Page">
                         {% else %}
                             <p class="error">Failed to capture Price Hover screenshot.</p>
                         {% endif %}
@@ -79,7 +79,7 @@ def capture():
                     <div class="image-box">
                         <h3>Payment Hover Full Page Screenshot</h3>
                         {% if payment_base64 %}
-                            <img src="data:image/png;base64,{{ payment_base64 }}" alt="Payment Hover Full Page">
+                            <img src="image/png;base64,{{ payment_base64 }}" alt="Payment Hover Full Page">
                         {% else %}
                             <p class="error">Failed to capture Payment Hover screenshot.</p>
                         {% endif %}
@@ -179,12 +179,11 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         except Exception as e:
             print(f"ZIP set failed: {e}")
 
-        # Wait for price and payment elements
+        # Wait for key elements - using longer timeouts
         try:
-            page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", state="visible", timeout=10_000)
-            page.wait_for_selector(".est-payment-block", state="visible", timeout=10_000)
+            page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", state="visible", timeout=15_000)
         except Exception as e:
-            print(f"Selector wait failed: {e}")
+            print(f"Price selector wait failed: {e}")
 
         # Capture price hover screenshot
         price_selector = ".MuiTypography-root.MuiTypography-subtitle1:visible"
@@ -201,36 +200,72 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             try:
                 visible_price.scroll_into_view_if_needed(timeout=5000)
                 visible_price.hover(timeout=10000, force=True)
-                page.wait_for_timeout(1000)  # Wait for tooltip to appear
+                page.wait_for_timeout(1500)  # Wait for tooltip to appear
                 page.screenshot(path=price_png_path, full_page=True)
-                print(f"Price full page screenshot saved to: {price_png_path}")
+                print(f"✅ Price full page screenshot saved to: {price_png_path}")
             except Exception as e:
-                print(f"Price hover failed: {e}")
+                print(f"❌ Price hover failed: {e}")
         else:
-            print("No visible price element found")
+            print("❌ No visible price element found")
 
-        # Capture payment hover screenshot
-        payment_selector = ".est-payment-block:visible"
-        payment_elements = page.locator(payment_selector)
-        print(f"Number of payment elements found: {payment_elements.count()}")
-        visible_payment = None
-        for i in range(payment_elements.count()):
-            elem = payment_elements.nth(i)
-            if elem.is_visible():
-                visible_payment = elem
-                print(f"Visible payment element found at index {i}")
-                break
-        if visible_payment:
+        # Capture payment hover screenshot - Try multiple selectors
+        print("\n=== Attempting Payment Hover Capture ===")
+        
+        # List of possible selectors to try
+        payment_selectors = [
+            "div:has-text('Est. Payment') >> ..",  # Parent of text containing "Est. Payment"
+            "text=/Est\\.?\\s*Payment/i >> ..",  # Regex match for Est Payment
+            "[class*='payment']",  # Any element with 'payment' in class
+            ".est-payment-block",  # Original selector
+            "div:has-text('$') >> visible=true",  # Any div with dollar sign
+        ]
+        
+        payment_captured = False
+        for selector_idx, payment_selector in enumerate(payment_selectors):
             try:
-                visible_payment.scroll_into_view_if_needed(timeout=5000)
-                visible_payment.hover(timeout=10000, force=True)
-                page.wait_for_timeout(1000)  # Wait for tooltip to appear
-                page.screenshot(path=payment_png_path, full_page=True)
-                print(f"Payment full page screenshot saved to: {payment_png_path}")
+                print(f"Trying payment selector #{selector_idx + 1}: {payment_selector}")
+                payment_elements = page.locator(payment_selector)
+                count = payment_elements.count()
+                print(f"  Found {count} payment elements with this selector")
+                
+                if count > 0:
+                    # Try each element
+                    for i in range(min(count, 5)):  # Try up to 5 elements
+                        elem = payment_elements.nth(i)
+                        try:
+                            if elem.is_visible():
+                                print(f"  Element {i} is visible, attempting hover...")
+                                elem.scroll_into_view_if_needed(timeout=5000)
+                                elem.hover(timeout=10000, force=True)
+                                page.wait_for_timeout(1500)
+                                page.screenshot(path=payment_png_path, full_page=True)
+                                print(f"✅ Payment full page screenshot saved to: {payment_png_path}")
+                                payment_captured = True
+                                break
+                        except Exception as e:
+                            print(f"  Element {i} hover failed: {e}")
+                            continue
+                
+                if payment_captured:
+                    break
+                    
             except Exception as e:
-                print(f"Payment hover failed: {e}")
-        else:
-            print("No visible payment element found")
+                print(f"  Selector #{selector_idx + 1} failed: {e}")
+                continue
+        
+        if not payment_captured:
+            print("❌ No visible payment element found with any selector")
+            # Try to get page content for debugging
+            try:
+                content = page.content()
+                if "payment" in content.lower():
+                    print("⚠️  Page contains 'payment' text, but unable to locate hover element")
+                    # Look for any element containing payment text
+                    page.wait_for_timeout(2000)
+                    all_payment_text = page.locator("text=/payment/i")
+                    print(f"  Found {all_payment_text.count()} elements with 'payment' text")
+            except Exception as e:
+                print(f"Debug content check failed: {e}")
 
         browser.close()
 
