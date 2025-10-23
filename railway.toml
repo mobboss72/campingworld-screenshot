@@ -1,5 +1,9 @@
 [build]
-buildCommand = "pip install -r requirements.txt"
+# Ensure browsers are downloaded during build, not just installed
+buildCommand = """
+pip install -r requirements.txt
+python -m playwright install --with-deps chromium
+"""
 
 [start]
-startCommand = "bash start.sh && gunicorn -w 1 --timeout 120 -b 0.0.0.0:$PORT server:app"
+startCommand = "gunicorn -w 1 --timeout 120 -b 0.0.0.0:$PORT server:app"
