@@ -181,7 +181,7 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         # Wait for price and payment elements
         try:
             page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", state="visible", timeout=10_000)
-            page.wait_for_selector(".est-payment-block a", state="visible", timeout=10_000)
+            page.wait_for_selector(".est-payment-block", state="visible", timeout=10_000)
         except Exception as e:
             print(f"Selector wait failed: {e}")
 
@@ -199,23 +199,22 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         if visible_price:
             try:
                 visible_price.scroll_into_view_if_needed(timeout=5000)
-                with page.expect_popup(timeout=10000) as popup_info:
-                    visible_price.hover(timeout=10000, force=True)
-                    page.wait_for_timeout(1000)
-                popup = popup_info.value
-                if popup:
-                    popup.wait_for_load_state("networkidle", timeout=10000)
-                    popup.screenshot(path=price_png_path)
-                    print(f"Price screenshot saved to: {price_png_path}")
+                visible_price.hover(timeout=10000, force=True)
+                page.wait_for_timeout(1000)
+                tooltip = page.query_selector(".MuiTooltip-tooltip")
+                if tooltip:
+                    tooltip.wait_for_selector(".MuiTooltip-tooltip", state="visible", timeout=10000)
+                    tooltip.screenshot(path=price_png_path)
+                    print(f"Price tooltip screenshot saved to: {price_png_path}")
                 else:
-                    print("No price popup detected")
+                    print("No tooltip element found for price")
             except Exception as e:
                 print(f"Price hover failed: {e}")
         else:
             print("No visible price element found")
 
         # Capture payment hover screenshot
-        payment_selector = ".est-payment-block a:visible"
+        payment_selector = ".est-payment-block:visible"
         payment_elements = page.locator(payment_selector)
         print(f"Number of payment elements found: {payment_elements.count()}")
         visible_payment = None
@@ -228,16 +227,15 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         if visible_payment:
             try:
                 visible_payment.scroll_into_view_if_needed(timeout=5000)
-                with page.expect_popup(timeout=10000) as popup_info:
-                    visible_payment.hover(timeout=10000, force=True)
-                    page.wait_for_timeout(1000)
-                popup = popup_info.value
-                if popup:
-                    popup.wait_for_load_state("networkidle", timeout=10000)
-                    popup.screenshot(path=payment_png_path)
-                    print(f"Payment screenshot saved to: {payment_png_path}")
+                visible_payment.hover(timeout=10000, force=True)
+                page.wait_for_timeout(1000)
+                tooltip = page.query_selector(".MuiTooltip-tooltip")
+                if tooltip:
+                    tooltip.wait_for_selector(".MuiTooltip-tooltip", state="visible", timeout=10000)
+                    tooltip.screenshot(path=payment_png_path)
+                    print(f"Payment tooltip screenshot saved to: {payment_png_path}")
                 else:
-                    print("No payment popup detected")
+                    print("No tooltip element found for payment")
             except Exception as e:
                 print(f"Payment hover failed: {e}")
         else:
