@@ -1,93 +1,140 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>CW Compliance Screenshot Tool</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #f4f4f4;
-            color: #333;
-        }
-        header {
-            background-color: #003087;
-            color: white;
-            padding: 1em;
-            text-align: center;
-        }
-        nav {
-            background-color: #0055a4;
-            padding: 1em;
-        }
-        nav a {
-            color: white;
-            margin: 0 15px;
-            text-decoration: none;
-        }
-        nav a:hover {
-            text-decoration: underline;
-        }
-        .content {
-            max-width: 800px;
-            margin: 20px auto;
-            padding: 20px;
-            background: white;
-            border-radius: 5px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-        }
-        h2 {
-            color: #003087;
-        }
-        form {
-            display: flex;
-            gap: 10px;
-        }
-        input[type="text"] {
-            padding: 8px;
-            font-size: 16px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-        button {
-            padding: 8px 15px;
-            background-color: #003087;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #0055a4;
-        }
-        p {
-            line-height: 1.6;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>CW Compliance Screenshot Tool</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root {
+      --primary: #003087;
+      --accent: #0055a4;
+      --bg: #f5f7fb;
+      --text: #2d2d2d;
+      --white: #ffffff;
+      --shadow: rgba(0, 0, 0, 0.08);
+    }
+
+    body {
+      font-family: "Inter", "Segoe UI", Roboto, Arial, sans-serif;
+      background: var(--bg);
+      margin: 0;
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    header {
+      width: 100%;
+      background: linear-gradient(90deg, var(--primary), var(--accent));
+      color: var(--white);
+      text-align: center;
+      padding: 1.5rem 0;
+      box-shadow: 0 2px 5px var(--shadow);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1.8rem;
+      letter-spacing: 0.5px;
+    }
+
+    .content {
+      background: var(--white);
+      max-width: 650px;
+      width: 90%;
+      margin-top: 2rem;
+      padding: 2rem;
+      border-radius: 12px;
+      box-shadow: 0 4px 15px var(--shadow);
+      animation: fadeIn 0.4s ease-in-out;
+    }
+
+    h2 {
+      color: var(--primary);
+      margin-top: 0;
+    }
+
+    p, ol {
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 1rem;
+    }
+
+    input[type="text"] {
+      padding: 12px;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      transition: border-color 0.2s ease;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--accent);
+      outline: none;
+      box-shadow: 0 0 5px rgba(0,85,164,0.2);
+    }
+
+    button {
+      background: var(--primary);
+      color: var(--white);
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    button:hover {
+      background: var(--accent);
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    footer {
+      margin-top: auto;
+      padding: 1rem;
+      font-size: 0.8rem;
+      color: #777;
+    }
+  </style>
 </head>
 <body>
-    <header>
-        <h1>CW Compliance Screenshot Tool</h1>
-    </header>
-    <nav>
-        <a href="#">Home</a>
-        <a href="#">About</a>
-        <a href="#">Contact</a>
-    </nav>
-    <div class="content">
-        <h2>Welcome to the Compliance Screenshot Tool</h2>
-        <p>This tool is designed to capture compliance screenshots from Camping World RV listings, specifically targeting hover states for price and payment details. It ensures legal timestamping for audit purposes.</p>
-        <h3>How to Use:</h3>
-        <ol>
-            <li>Enter a valid Camping World stock number (e.g., 2319928) in the field below.</li>
-            <li>Click 'Run Capture' to generate screenshots.</li>
-            <li>View the resulting images with embedded timestamps and SHA-256 hashes, displayed side by side.</li>
-        </ol>
-        <form method="POST" action="/capture">
-            <input type="text" name="stock" placeholder="e.g., 2319928" required>
-            <button type="submit">Run Capture</button>
-        </form>
-    </div>
+  <header>
+    <h1>CW Compliance Screenshot Tool</h1>
+  </header>
+
+  <div class="content">
+    <h2>Welcome</h2>
+    <p>This tool captures compliance screenshots from Camping World RV listings, including hover states for price and payment details. Each capture includes a legal timestamp and SHA-256 hash for verification.</p>
+
+    <h3>How to Use:</h3>
+    <ol>
+      <li>Enter a valid Camping World stock number (e.g., 2319928).</li>
+      <li>Click <strong>Run Capture</strong> to generate screenshots.</li>
+      <li>View the resulting images with timestamps and hashes.</li>
+    </ol>
+
+    <form method="POST" action="/capture">
+      <input type="text" name="stock" placeholder="Enter stock number..." required>
+      <button type="submit">Run Capture</button>
+    </form>
+  </div>
+
+  <footer>
+    © 2025 Camping World Compliance Tool
+  </footer>
 </body>
 </html>
