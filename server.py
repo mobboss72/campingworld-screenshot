@@ -12,8 +12,8 @@ import requests
 from flask import Flask, request, send_file, Response, send_from_directory
 from playwright.sync_api import sync_playwright
 
-# Set Playwright browsers path to a writable location (e.g., /tmp/ms-playwright as a fallback)
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/tmp/ms-playwright")
+# Set Playwright browsers path to a writable, persisted location under /app
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 
 PORT = int(os.getenv("PORT", "8080"))
 OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
