@@ -1,9 +1,10 @@
 [build]
-# Ensure browsers are downloaded during build, not just installed
+# Install dependencies and browsers during image build
 buildCommand = """
 pip install -r requirements.txt
 python -m playwright install --with-deps chromium
 """
 
 [start]
+# Start your Flask app through gunicorn after Chromium is ready
 startCommand = "gunicorn -w 1 --timeout 120 -b 0.0.0.0:$PORT server:app"
