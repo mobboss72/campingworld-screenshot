@@ -57,15 +57,16 @@ def capture():
                     .image-box { border: 1px solid #ccc; padding: 10px; }
                     .info { margin-top: 20px; font-size: 0.9em; }
                     .error { color: red; }
+                    img { max-width: 100%; height: auto; }
                 </style>
             </head>
             <body>
                 <h2>Camping World Proof (Compliance Capture)</h2>
                 <div class="container">
                     <div class="image-box">
-                        <h3>Price Hover Screenshot</h3>
+                        <h3>Price Hover Full Page Screenshot</h3>
                         {% if price_base64 %}
-                            <img src="data:image/png;base64,{{ price_base64 }}" alt="Price Hover">
+                            <img src="data:image/png;base64,{{ price_base64 }}" alt="Price Hover Full Page">
                         {% else %}
                             <p class="error">Failed to capture Price Hover screenshot.</p>
                         {% endif %}
@@ -76,9 +77,9 @@ def capture():
                         <p>SHA-256: {{ sha_price }}</p>
                     </div>
                     <div class="image-box">
-                        <h3>Payment Hover Screenshot</h3>
+                        <h3>Payment Hover Full Page Screenshot</h3>
                         {% if payment_base64 %}
-                            <img src="data:image/png;base64,{{ payment_base64 }}" alt="Payment Hover">
+                            <img src="data:image/png;base64,{{ payment_base64 }}" alt="Payment Hover Full Page">
                         {% else %}
                             <p class="error">Failed to capture Payment Hover screenshot.</p>
                         {% endif %}
@@ -201,13 +202,8 @@ def do_capture(stock: str) -> tuple[str, str, str]:
                 visible_price.scroll_into_view_if_needed(timeout=5000)
                 visible_price.hover(timeout=10000, force=True)
                 page.wait_for_timeout(1000)  # Wait for tooltip to appear
-                tooltip_selector = ".MuiTooltip-tooltip:visible"
-                tooltip = page.locator(tooltip_selector).first
-                if tooltip and tooltip.is_visible():
-                    tooltip.screenshot(path=price_png_path)
-                    print(f"Price tooltip screenshot saved to: {price_png_path}")
-                else:
-                    print("No visible tooltip found for price")
+                page.screenshot(path=price_png_path, full_page=True)
+                print(f"Price full page screenshot saved to: {price_png_path}")
             except Exception as e:
                 print(f"Price hover failed: {e}")
         else:
@@ -229,13 +225,8 @@ def do_capture(stock: str) -> tuple[str, str, str]:
                 visible_payment.scroll_into_view_if_needed(timeout=5000)
                 visible_payment.hover(timeout=10000, force=True)
                 page.wait_for_timeout(1000)  # Wait for tooltip to appear
-                tooltip_selector = ".MuiTooltip-tooltip:visible"
-                tooltip = page.locator(tooltip_selector).first
-                if tooltip and tooltip.is_visible():
-                    tooltip.screenshot(path=payment_png_path)
-                    print(f"Payment tooltip screenshot saved to: {payment_png_path}")
-                else:
-                    print("No visible tooltip found for payment")
+                page.screenshot(path=payment_png_path, full_page=True)
+                print(f"Payment full page screenshot saved to: {payment_png_path}")
             except Exception as e:
                 print(f"Payment hover failed: {e}")
         else:
