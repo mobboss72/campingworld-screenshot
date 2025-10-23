@@ -1,5 +1,5 @@
 [build]
-buildCommand = "bash start.sh"
+buildCommand = "pip install -r requirements.txt"
 
 [start]
-startCommand = "gunicorn -w 1 -b 0.0.0.0:$PORT server:app"
+startCommand = "bash -lc 'python -m playwright install chromium && gunicorn -w 1 -b 0.0.0.0:$PORT server:app'"
