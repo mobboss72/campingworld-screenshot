@@ -46,7 +46,7 @@ def capture():
         price_base64 = encode_image_to_base64(price_png_path) if os.path.exists(price_png_path) else ""
         payment_base64 = encode_image_to_base64(payment_png_path) if os.path.exists(payment_png_path) else ""
 
-        html = render_template_string("""
+        html = render_template_string('''
             <!DOCTYPE html>
             <html>
             <head>
@@ -91,7 +91,7 @@ def capture():
                 </div>
             </body>
             </html>
-        """, 
+        ''', 
         stock=stock, 
         url=url, 
         utc_now=utc_now, 
@@ -150,7 +150,7 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             locale="en-US",
             geolocation={"latitude": 45.5122, "longitude": -122.6587},
             permissions=["geolocation"],
-            viewport={"width": 1920, "height": 1080"},
+            viewport={"width": 1920, "height": 1080},
             user_agent="Mozilla/5.0 Chrome",
         )
         page = ctx.new_page()
@@ -166,10 +166,12 @@ def do_capture(stock: str) -> tuple[str, str, str]:
 
         # Set Oregon ZIP
         try:
-            page.evaluate(
-                "(zip)=>{try{localStorage.setItem('cw_zip',zip);}catch(e){};document.cookie='cw_zip='+zip+';path=/;SameSite=Lax';}",
-                OREGON_ZIP,
-            )
+            page.evaluate('''(zip) => {
+                try {
+                    localStorage.setItem('cw_zip', zip);
+                } catch (e) {}
+                document.cookie = 'cw_zip=' + zip + ';path=/;SameSite=Lax';
+            }''', OREGON_ZIP)
             page.reload(wait_until="domcontentloaded")
             try:
                 page.wait_for_load_state("networkidle", timeout=20_000)
