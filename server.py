@@ -159,10 +159,8 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         page.goto(url, wait_until="domcontentloaded")
         try:
             page.wait_for_load_state("networkidle", timeout=30_000)
-            page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", state="visible", timeout=10_000)
-            page.wait_for_selector(".est-payment-block a", state="visible", timeout=10_000)
         except Exception as e:
-            print(f"Load or selector wait failed: {e}")
+            print(f"Load failed: {e}")
 
         # Set Oregon ZIP
         try:
@@ -180,37 +178,58 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         except Exception as e:
             print(f"ZIP set failed: {e}")
 
+        # Wait for price and payment elements
+        try:
+            page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", state="visible", timeout=10_000)
+            page.wait_for_selector(".est-payment-block a", state="visible", timeout=10_000)
+        except Exception as e:
+            print(f"Selector wait failed: {e}")
+
         # Capture price hover screenshot
-        price_element = page.query_selector(".MuiTypography-root.MuiTypography-subtitle1")
-        if price_element:
-            with page.expect_popup() as popup_info:
-                price_element.hover()
-                page.wait_for_timeout(500)  # Add delay to allow popup to appear
-            popup = popup_info.value
-            if popup:
-                popup.wait_for_load_state("networkidle", timeout=10_000)
-                popup.screenshot(path=price_png_path)
-                print(f"Price screenshot saved to: {price_png_path}")
-            else:
-                print("No price popup detected")
+        price_selector = ".MuiTypography-root.MuiTypography-subtitle1:visible"
+        price_elements = page.locator(price_selector)
+        print(f"Number of price elements found: {price_elements.count()}")
+        price_element = price_elements.first
+        if price_element and price_element.is_visible():
+            try:
+                price_element.scroll_into_view_if_needed(timeout=5000)
+                with page.expect_popup(timeout=10000) as popup_info:
+                    price_element.hover(timeout=10000, force=False)
+                    page.wait_for_timeout(1000)  # Increased delay
+                popup = popup_info.value
+                if popup:
+                    popup.wait_for_load_state("networkidle", timeout=10000)
+                    popup.screenshot(path=price_png_path)
+                    print(f"Price screenshot saved to: {price_png_path}")
+                else:
+                    print("No price popup detected")
+            except Exception as e:
+                print(f"Price hover failed: {e}")
         else:
-            print("Price element not found")
+            print("Price element not found or not visible")
 
         # Capture payment hover screenshot
-        payment_element = page.query_selector(".est-payment-block a")
-        if payment_element:
-            with page.expect_popup() as popup_info:
-                payment_element.hover()
-                page.wait_for_timeout(500)  # Add delay to allow popup to appear
-            popup = popup_info.value
-            if popup:
-                popup.wait_for_load_state("networkidle", timeout=10_000)
-                popup.screenshot(path=payment_png_path)
-                print(f"Payment screenshot saved to: {payment_png_path}")
-            else:
-                print("No payment popup detected")
+        payment_selector = ".est-payment-block a:visible"
+        payment_elements = page.locator(payment_selector)
+        print(f"Number of payment elements found: {payment_elements.count()}")
+        payment_element = payment_elements.first
+        if payment_element and payment_element.is_visible():
+            try:
+                payment_element.scroll_into_view_if_needed(timeout=5000)
+                with page.expect_popup(timeout=10000) as popup_info:
+                    payment_element.hover(timeout=10000, force=False)
+                    page.wait_for_timeout(1000)  # Increased delay
+                popup = popup_info.value
+                if popup:
+                    popup.wait_for_load_state("networkidle", timeout=10000)
+                    popup.screenshot(path=payment_png_path)
+                    print(f"Payment screenshot saved to: {payment_png_path}")
+                else:
+                    print("No payment popup detected")
+            except Exception as e:
+                print(f"Payment hover failed: {e}")
         else:
-            print("Payment element not found")
+            print("Payment element not found or not visible")
 
         browser.close()
 
