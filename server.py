@@ -337,12 +337,12 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         # ===== CAPTURE PAYMENT HOVER SCREENSHOT =====
         print("\n=== Capturing Payment Hover ===")
         
-        # First, try to find the payment element using the same approach as price
-        # Look for the subtitle2 class that likely contains the Est. Payment text
+        # Based on inspect element: The payment has body2 class inside the hover trigger
+        # We need to find the element that triggers MuiTooltip
         payment_selectors = [
-            ".MuiTypography-root.MuiTypography-subtitle2:visible",  # Same pattern as price
-            "div:has-text('Est. Payment') .MuiTypography-subtitle2",
-            "[class*='MuiTypography'][class*='subtitle2']:visible",
+            ".MuiTypography-root.MuiTypography-body2:has-text('Est. Payment')",  # body2 with Est. Payment text
+            "div:has-text('Est. Payment') .MuiTypography-body2",  # body2 inside Est. Payment div
+            ".MuiTypography-body2:visible",  # Any visible body2 typography
         ]
         
         payment_captured = False
@@ -363,14 +363,30 @@ def do_capture(stock: str) -> tuple[str, str, str]:
                             if elem.is_visible():
                                 # Check if this element contains payment-related text
                                 text_content = elem.inner_text().lower()
-                                print(f"  Element {i} text: {text_content[:50]}")
+                                print(f"  Element {i} text: {text_content[:100]}")
                                 
-                                # Look for payment indicators
-                                if any(keyword in text_content for keyword in ['payment', '$', '/mo']):
-                                    print(f"  Element {i} looks like payment element, hovering...")
+                                # Look for Est. Payment specifically
+                                if 'est' in text_content and 'payment' in text_content:
+                                    print(f"  Element {i} is the payment element, hovering...")
                                     elem.scroll_into_view_if_needed(timeout=5000)
+                                    
+                                    # Use JavaScript to trigger mouseover event (more reliable)
+                                    page.evaluate('''(element) => {
+                                        const event = new MouseEvent('mouseover', {
+                                            bubbles: true,
+                                            cancelable: true,
+                                            view: window
+                                        });
+                                        element.dispatchEvent(event);
+                                    }''', elem.element_handle())
+                                    
+                                    # Also do regular hover
                                     elem.hover(timeout=10000, force=True)
-                                    page.wait_for_timeout(2000)  # Wait longer for tooltip
+                                    
+                                    # Wait longer for tooltip to appear
+                                    page.wait_for_timeout(2500)
+                                    
+                                    # Take screenshot
                                     page.screenshot(path=payment_png_path, full_page=True)
                                     
                                     if os.path.exists(payment_png_path):
