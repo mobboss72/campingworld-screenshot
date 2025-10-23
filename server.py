@@ -170,7 +170,7 @@ def capture():
                             <p><strong>URL:</strong> <a href="{{ url }}" target="_blank">{{ url }}</a></p>
                             <p><strong>UTC:</strong> {{ utc_now }}</p>
                             <p><strong>HTTPS Date:</strong> {{ hdate or 'unavailable' }}</p>
-                            <p><strong>SHA-256:</strong> odede>{{ sha_price }}</code></p>
+                            <p><strong>SHA-256:</strong> <code>{{ sha_price }}</code></p>
                         </div>
                     </div>
                     <div class="image-box">
@@ -337,53 +337,57 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         # ===== CAPTURE PAYMENT HOVER SCREENSHOT =====
         print("\n=== Capturing Payment Hover ===")
         
+        # First, try to find the payment element using the same approach as price
+        # Look for the subtitle2 class that likely contains the Est. Payment text
         payment_selectors = [
-            "div:has-text('Est. Payment') >> ..",
-            "text=/Est\\.?\\s*Payment/i >> ..",
-            "[class*='payment']",
-            ".est-payment-block",
-            "div:has-text('$') >> visible=true",
+            ".MuiTypography-root.MuiTypography-subtitle2:visible",  # Same pattern as price
+            "div:has-text('Est. Payment') .MuiTypography-subtitle2",
+            "[class*='MuiTypography'][class*='subtitle2']:visible",
         ]
         
         payment_captured = False
         for selector_idx, payment_selector in enumerate(payment_selectors):
+            if payment_captured:
+                break
+                
             try:
-                print(f"Trying selector #{selector_idx + 1}: {payment_selector}")
+                print(f"Trying payment selector #{selector_idx + 1}: {payment_selector}")
                 payment_elements = page.locator(payment_selector)
                 count = payment_elements.count()
                 print(f"  Found {count} elements")
                 
                 if count > 0:
-                    for i in range(min(count, 5)):
+                    for i in range(count):
                         elem = payment_elements.nth(i)
                         try:
                             if elem.is_visible():
-                                print(f"  Element {i} is visible, hovering...")
-                                elem.scroll_into_view_if_needed(timeout=5000)
-                                elem.hover(timeout=10000, force=True)
-                                page.wait_for_timeout(1500)
-                                page.screenshot(path=payment_png_path, full_page=True)
+                                # Check if this element contains payment-related text
+                                text_content = elem.inner_text().lower()
+                                print(f"  Element {i} text: {text_content[:50]}")
                                 
-                                if os.path.exists(payment_png_path):
-                                    size = os.path.getsize(payment_png_path)
-                                    print(f"✅ Payment screenshot saved: {size} bytes")
-                                    payment_captured = True
-                                    break
-                                else:
-                                    print("  Screenshot file not created")
+                                # Look for payment indicators
+                                if any(keyword in text_content for keyword in ['payment', '$', '/mo']):
+                                    print(f"  Element {i} looks like payment element, hovering...")
+                                    elem.scroll_into_view_if_needed(timeout=5000)
+                                    elem.hover(timeout=10000, force=True)
+                                    page.wait_for_timeout(2000)  # Wait longer for tooltip
+                                    page.screenshot(path=payment_png_path, full_page=True)
+                                    
+                                    if os.path.exists(payment_png_path):
+                                        size = os.path.getsize(payment_png_path)
+                                        print(f"✅ Payment screenshot saved: {size} bytes")
+                                        payment_captured = True
+                                        break
                         except Exception as e:
                             print(f"  Element {i} failed: {e}")
                             continue
-                
-                if payment_captured:
-                    break
                     
             except Exception as e:
                 print(f"  Selector #{selector_idx + 1} error: {e}")
                 continue
         
         if not payment_captured:
-            print("❌ No payment element successfully captured")
+            print("❌ No payment element successfully captured with tooltip")
 
         browser.close()
         print("\n=== Browser closed ===")
