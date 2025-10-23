@@ -1,11 +1,8 @@
-# Base on Ubuntu 24.04 for compatibility with Playwright dependencies
-FROM ubuntu:24.04
+# Base on official Python 3.13 slim image (Debian-based) for pre-installed Python
+FROM python:3.13-slim
 
 # Install system dependencies required for Chromium Headless Shell
 RUN apt-get update && apt-get install -y \
-    python3.13 \
-    python3.13-venv \
-    python3-pip \
     libglib2.0-0 \
     libnss3 \
     libatk1.0-0 \
@@ -28,7 +25,6 @@ RUN apt-get update && apt-get install -y \
     fonts-liberation \
     libappindicator3-1 \
     libnspr4 \
-    libnss3 \
     lsb-release \
     wget \
     xdg-utils \
@@ -39,18 +35,15 @@ WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN python3.13 -m venv /app/.venv && \
-    . /app/.venv/bin/activate && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers with custom path
 RUN mkdir -p /app/ms-playwright && \
-    . /app/.venv/bin/activate && \
-    PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright python3.13 -m playwright install --with-deps chromium
+    PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright python -m playwright install --with-deps chromium
 
 # Copy app code
 COPY . .
 
 # Expose port and set entrypoint
 EXPOSE $PORT
-CMD ["/app/.venv/bin/gunicorn", "-w", "1", "--timeout", "180", "-b", "0.0.0.0:$PORT", "server:app"]
+CMD ["gunicorn", "-w", "1", "--timeout", "180", "-b", "0.0.0.0:$PORT", "server:app"]
