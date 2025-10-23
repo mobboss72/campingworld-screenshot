@@ -2,15 +2,15 @@ import os, io, zipfile, hashlib, datetime, requests, tempfile, sys, traceback
 from flask import Flask, request, send_file, Response
 from playwright.sync_api import sync_playwright
 
-# Bind static files from /public (index.html goes there)
-app = Flask(__name__, static_folder="public", static_url_path="")
+# Serve static files from the root directory (index.html goes in the same directory as this script)
+app = Flask(__name__, static_folder=".", static_url_path="")
 
 PORT = int(os.getenv("PORT", "8080"))
 OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
 
 @app.get("/")
 def root():
-    # serves public/index.html
+    # serves ./index.html directly from root directory
     return app.send_static_file("index.html")
 
 def https_date():
@@ -21,11 +21,6 @@ def https_date():
         return None
 
 def do_capture(stock: str):
-    """
-    Returns (png_path, url) after visiting the RV page and taking a screenshot.
-    This is the minimal version to get the service working; we can swap in the
-    tooltip + side-by-side logic once this is stable.
-    """
     url = f"https://rv.campingworld.com/rv/{stock}"
     tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
     png_path = os.path.join(tmpdir, f"cw_{stock}.png")
@@ -33,25 +28,23 @@ def do_capture(stock: str):
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]  # required on Railway
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
         )
         ctx = browser.new_context(
             locale="en-US",
-            geolocation={"latitude": 45.5122, "longitude": -122.6587},  # Oregon-ish
+            geolocation={"latitude": 45.5122, "longitude": -122.6587},
             permissions=["geolocation"],
             viewport={"width": 1920, "height": 1080},
             user_agent="Mozilla/5.0 Chrome"
         )
         page = ctx.new_page()
 
-        # Go to unit page
         page.goto(url, wait_until="domcontentloaded")
         try:
             page.wait_for_load_state("networkidle", timeout=30000)
         except Exception:
             pass
 
-        # Force Oregon ZIP via localStorage + cookie, then reload
         try:
             page.evaluate(
                 "(zip)=>{try{localStorage.setItem('cw_zip',zip);}catch(e){};document.cookie='cw_zip='+zip+';path=/;SameSite=Lax';}",
@@ -65,7 +58,6 @@ def do_capture(stock: str):
         except Exception:
             pass
 
-        # (Basic) take a screenshot of the page; we’ll add tooltips next.
         page.screenshot(path=png_path, full_page=False)
         browser.close()
 
@@ -84,12 +76,11 @@ def capture():
         hdate = https_date()
         sha = hashlib.sha256(open(png_path, "rb").read()).hexdigest()
 
-        # Build a ZIP in-memory
         mem = io.BytesIO()
         with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as z:
             z.write(png_path, arcname=f"cw_{stock}.png")
             manifest = "\n".join([
-                "Camping World Proof (minimal server demo)",
+                "Camping World Proof (root server demo)",
                 f"Stock: {stock}",
                 f"URL: {url}",
                 f"UTC: {utc_now}",
