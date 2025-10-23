@@ -189,13 +189,19 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         price_selector = ".MuiTypography-root.MuiTypography-subtitle1:visible"
         price_elements = page.locator(price_selector)
         print(f"Number of price elements found: {price_elements.count()}")
-        price_element = price_elements.first
-        if price_element and price_element.is_visible():
+        visible_price = None
+        for i in range(price_elements.count()):
+            elem = price_elements.nth(i)
+            if elem.is_visible():
+                visible_price = elem
+                print(f"Visible price element found at index {i}")
+                break
+        if visible_price:
             try:
-                price_element.scroll_into_view_if_needed(timeout=5000)
+                visible_price.scroll_into_view_if_needed(timeout=5000)
                 with page.expect_popup(timeout=10000) as popup_info:
-                    price_element.hover(timeout=10000, force=False)
-                    page.wait_for_timeout(1000)  # Increased delay
+                    visible_price.hover(timeout=10000, force=True)
+                    page.wait_for_timeout(1000)
                 popup = popup_info.value
                 if popup:
                     popup.wait_for_load_state("networkidle", timeout=10000)
@@ -206,19 +212,25 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             except Exception as e:
                 print(f"Price hover failed: {e}")
         else:
-            print("Price element not found or not visible")
+            print("No visible price element found")
 
         # Capture payment hover screenshot
         payment_selector = ".est-payment-block a:visible"
         payment_elements = page.locator(payment_selector)
         print(f"Number of payment elements found: {payment_elements.count()}")
-        payment_element = payment_elements.first
-        if payment_element and payment_element.is_visible():
+        visible_payment = None
+        for i in range(payment_elements.count()):
+            elem = payment_elements.nth(i)
+            if elem.is_visible():
+                visible_payment = elem
+                print(f"Visible payment element found at index {i}")
+                break
+        if visible_payment:
             try:
-                payment_element.scroll_into_view_if_needed(timeout=5000)
+                visible_payment.scroll_into_view_if_needed(timeout=5000)
                 with page.expect_popup(timeout=10000) as popup_info:
-                    payment_element.hover(timeout=10000, force=False)
-                    page.wait_for_timeout(1000)  # Increased delay
+                    visible_payment.hover(timeout=10000, force=True)
+                    page.wait_for_timeout(1000)
                 popup = popup_info.value
                 if popup:
                     popup.wait_for_load_state("networkidle", timeout=10000)
@@ -229,7 +241,7 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             except Exception as e:
                 print(f"Payment hover failed: {e}")
         else:
-            print("Payment element not found or not visible")
+            print("No visible payment element found")
 
         browser.close()
 
