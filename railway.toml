@@ -1,7 +1,7 @@
 [build]
-# Only install Python deps during build. Do NOT install browsers here.
-buildCommand = "pip install -r requirements.txt"
+# Install Python dependencies and Playwright browsers during build phase
+buildCommand = "mkdir -p /tmp/ms-playwright && pip install -r requirements.txt && python -m playwright install --with-deps chromium"
 
 [start]
-# At container start: fetch Chromium, then run Gunicorn. Higher timeout for Playwright work.
-startCommand = "bash start.sh && gunicorn -w 1 --timeout 180 -b 0.0.0.0:$PORT server:app"
+# Start Gunicorn with sufficient timeout for Playwright operations
+startCommand = "gunicorn -w 1 --timeout 180 -b 0.0.0.0:$PORT server:app"
