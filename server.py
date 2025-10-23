@@ -200,14 +200,14 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             try:
                 visible_price.scroll_into_view_if_needed(timeout=5000)
                 visible_price.hover(timeout=10000, force=True)
-                page.wait_for_timeout(1000)
-                tooltip = page.query_selector(".MuiTooltip-tooltip")
-                if tooltip:
-                    tooltip.wait_for_selector(".MuiTooltip-tooltip", state="visible", timeout=10000)
+                page.wait_for_timeout(1000)  # Wait for tooltip to appear
+                tooltip_selector = ".MuiTooltip-tooltip:visible"
+                tooltip = page.locator(tooltip_selector).first
+                if tooltip and tooltip.is_visible():
                     tooltip.screenshot(path=price_png_path)
                     print(f"Price tooltip screenshot saved to: {price_png_path}")
                 else:
-                    print("No tooltip element found for price")
+                    print("No visible tooltip found for price")
             except Exception as e:
                 print(f"Price hover failed: {e}")
         else:
@@ -228,14 +228,14 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             try:
                 visible_payment.scroll_into_view_if_needed(timeout=5000)
                 visible_payment.hover(timeout=10000, force=True)
-                page.wait_for_timeout(1000)
-                tooltip = page.query_selector(".MuiTooltip-tooltip")
-                if tooltip:
-                    tooltip.wait_for_selector(".MuiTooltip-tooltip", state="visible", timeout=10000)
+                page.wait_for_timeout(1000)  # Wait for tooltip to appear
+                tooltip_selector = ".MuiTooltip-tooltip:visible"
+                tooltip = page.locator(tooltip_selector).first
+                if tooltip and tooltip.is_visible():
                     tooltip.screenshot(path=payment_png_path)
                     print(f"Payment tooltip screenshot saved to: {payment_png_path}")
                 else:
-                    print("No tooltip element found for payment")
+                    print("No visible tooltip found for payment")
             except Exception as e:
                 print(f"Payment hover failed: {e}")
         else:
