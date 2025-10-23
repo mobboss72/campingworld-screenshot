@@ -8,6 +8,7 @@ import datetime
 import tempfile
 import traceback
 import requests
+import base64
 
 from flask import Flask, request, send_from_directory, Response, render_template_string
 from playwright.sync_api import sync_playwright
@@ -38,10 +39,13 @@ def capture():
 
         utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         hdate = https_date()
-        sha_price = sha256_file(price_png_path)
-        sha_payment = sha256_file(payment_png_path)
+        sha_price = sha256_file(price_png_path) if os.path.exists(price_png_path) else "N/A (Capture failed)"
+        sha_payment = sha256_file(payment_png_path) if os.path.exists(payment_png_path) else "N/A (Capture failed)"
 
-        # Render template with images side by side
+        # Render template with images side by side, handling missing files
+        price_base64 = encode_image_to_base64(price_png_path) if os.path.exists(price_png_path) else ""
+        payment_base64 = encode_image_to_base64(payment_png_path) if os.path.exists(payment_png_path) else ""
+
         html = render_template_string("""
             <!DOCTYPE html>
             <html>
@@ -52,6 +56,7 @@ def capture():
                     .container { display: flex; flex-wrap: wrap; gap: 20px; }
                     .image-box { border: 1px solid #ccc; padding: 10px; }
                     .info { margin-top: 20px; font-size: 0.9em; }
+                    .error { color: red; }
                 </style>
             </head>
             <body>
@@ -59,7 +64,11 @@ def capture():
                 <div class="container">
                     <div class="image-box">
                         <h3>Price Hover Screenshot</h3>
-                        <img src="data:image/png;base64,{{ price_base64 }}" alt="Price Hover">
+                        {% if price_base64 %}
+                            <img src="data:image/png;base64,{{ price_base64 }}" alt="Price Hover">
+                        {% else %}
+                            <p class="error">Failed to capture Price Hover screenshot.</p>
+                        {% endif %}
                         <p>Stock: {{ stock }}</p>
                         <p>URL: {{ url }}</p>
                         <p>UTC: {{ utc_now }}</p>
@@ -68,7 +77,11 @@ def capture():
                     </div>
                     <div class="image-box">
                         <h3>Payment Hover Screenshot</h3>
-                        <img src="data:image/png;base64,{{ payment_base64 }}" alt="Payment Hover">
+                        {% if payment_base64 %}
+                            <img src="data:image/png;base64,{{ payment_base64 }}" alt="Payment Hover">
+                        {% else %}
+                            <p class="error">Failed to capture Payment Hover screenshot.</p>
+                        {% endif %}
                         <p>Stock: {{ stock }}</p>
                         <p>URL: {{ url }}</p>
                         <p>UTC: {{ utc_now }}</p>
@@ -83,8 +96,8 @@ def capture():
         url=url, 
         utc_now=utc_now, 
         hdate=hdate,
-        price_base64=encode_image_to_base64(price_png_path),
-        payment_base64=encode_image_to_base64(payment_png_path),
+        price_base64=price_base64,
+        payment_base64=payment_base64,
         sha_price=sha_price,
         sha_payment=sha_payment)
 
@@ -97,6 +110,8 @@ def capture():
 
 # Helpers
 def sha256_file(path: str) -> str:
+    if not os.path.exists(path):
+        return "N/A (File not found)"
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -111,7 +126,8 @@ def https_date() -> str | None:
         return None
 
 def encode_image_to_base64(path: str) -> str:
-    import base64
+    if not os.path.exists(path):
+        return ""
     with open(path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
 
@@ -134,17 +150,19 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             locale="en-US",
             geolocation={"latitude": 45.5122, "longitude": -122.6587},
             permissions=["geolocation"],
-            viewport={"width": 1920, "height": 1080},
+            viewport={"width": 1920, "height": 1080"},
             user_agent="Mozilla/5.0 Chrome",
         )
         page = ctx.new_page()
 
-        # Load unit page
+        # Load unit page and ensure interactivity
         page.goto(url, wait_until="domcontentloaded")
         try:
             page.wait_for_load_state("networkidle", timeout=30_000)
-        except Exception:
-            pass
+            page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", state="visible", timeout=10_000)
+            page.wait_for_selector(".est-payment-block a", state="visible", timeout=10_000)
+        except Exception as e:
+            print(f"Load or selector wait failed: {e}")
 
         # Set Oregon ZIP
         try:
@@ -155,28 +173,42 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             page.reload(wait_until="domcontentloaded")
             try:
                 page.wait_for_load_state("networkidle", timeout=20_000)
-            except Exception:
-                pass
-        except Exception:
-            pass
+            except Exception as e:
+                print(f"Reload failed: {e}")
+        except Exception as e:
+            print(f"ZIP set failed: {e}")
 
         # Capture price hover screenshot
-        price_element = page.query_selector(".price-block a")
+        price_element = page.query_selector(".MuiTypography-root.MuiTypography-subtitle1")
         if price_element:
             with page.expect_popup() as popup_info:
                 price_element.hover()
+                page.wait_for_timeout(500)  # Add delay to allow popup to appear
             popup = popup_info.value
-            popup.wait_for_load_state("networkidle")
-            popup.screenshot(path=price_png_path)
+            if popup:
+                popup.wait_for_load_state("networkidle", timeout=10_000)
+                popup.screenshot(path=price_png_path)
+                print(f"Price screenshot saved to: {price_png_path}")
+            else:
+                print("No price popup detected")
+        else:
+            print("Price element not found")
 
         # Capture payment hover screenshot
         payment_element = page.query_selector(".est-payment-block a")
         if payment_element:
             with page.expect_popup() as popup_info:
                 payment_element.hover()
+                page.wait_for_timeout(500)  # Add delay to allow popup to appear
             popup = popup_info.value
-            popup.wait_for_load_state("networkidle")
-            popup.screenshot(path=payment_png_path)
+            if popup:
+                popup.wait_for_load_state("networkidle", timeout=10_000)
+                popup.screenshot(path=payment_png_path)
+                print(f"Payment screenshot saved to: {payment_png_path}")
+            else:
+                print("No payment popup detected")
+        else:
+            print("Payment element not found")
 
         browser.close()
 
