@@ -9,7 +9,7 @@ import tempfile
 import traceback
 import requests
 
-from flask import Flask, request, send_file, Response, send_from_directory
+from flask import Flask, request, send_from_directory, Response, render_template_string
 from playwright.sync_api import sync_playwright
 
 # Set Playwright browsers path to a writable, persisted location under /app
@@ -33,33 +33,62 @@ def capture():
         if not stock.isdigit():
             return Response("Invalid stock number", status=400)
 
-        png_path, url = do_capture(stock)
+        # Capture screenshots with hover states
+        price_png_path, payment_png_path, url = do_capture(stock)
 
         utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         hdate = https_date()
-        sha = sha256_file(png_path)
+        sha_price = sha256_file(price_png_path)
+        sha_payment = sha256_file(payment_png_path)
 
-        mem = io.BytesIO()
-        with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as z:
-            z.write(png_path, arcname=f"cw_{stock}.png")
-            manifest = "\n".join([
-                "Camping World Proof (minimal server demo)",
-                f"Stock: {stock}",
-                f"URL: {url}",
-                f"UTC: {utc_now}",
-                f"HTTPS Date: {hdate or 'unavailable'}",
-                f"SHA-256: {sha}",
-                ""
-            ])
-            z.writestr("manifest.txt", manifest)
-        mem.seek(0)
+        # Render template with images side by side
+        html = render_template_string("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Compliance Screenshots</title>
+                <style>
+                    body { font-family: Arial, sans-serif; margin: 20px; }
+                    .container { display: flex; flex-wrap: wrap; gap: 20px; }
+                    .image-box { border: 1px solid #ccc; padding: 10px; }
+                    .info { margin-top: 20px; font-size: 0.9em; }
+                </style>
+            </head>
+            <body>
+                <h2>Camping World Proof (Compliance Capture)</h2>
+                <div class="container">
+                    <div class="image-box">
+                        <h3>Price Hover Screenshot</h3>
+                        <img src="data:image/png;base64,{{ price_base64 }}" alt="Price Hover">
+                        <p>Stock: {{ stock }}</p>
+                        <p>URL: {{ url }}</p>
+                        <p>UTC: {{ utc_now }}</p>
+                        <p>HTTPS Date: {{ hdate or 'unavailable' }}</p>
+                        <p>SHA-256: {{ sha_price }}</p>
+                    </div>
+                    <div class="image-box">
+                        <h3>Payment Hover Screenshot</h3>
+                        <img src="data:image/png;base64,{{ payment_base64 }}" alt="Payment Hover">
+                        <p>Stock: {{ stock }}</p>
+                        <p>URL: {{ url }}</p>
+                        <p>UTC: {{ utc_now }}</p>
+                        <p>HTTPS Date: {{ hdate or 'unavailable' }}</p>
+                        <p>SHA-256: {{ sha_payment }}</p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        """, 
+        stock=stock, 
+        url=url, 
+        utc_now=utc_now, 
+        hdate=hdate,
+        price_base64=encode_image_to_base64(price_png_path),
+        payment_base64=encode_image_to_base64(payment_png_path),
+        sha_price=sha_price,
+        sha_payment=sha_payment)
 
-        return send_file(
-            mem,
-            mimetype="application/zip",
-            as_attachment=True,
-            download_name=f"cw_{stock}_bundle.zip"
-        )
+        return Response(html, mimetype="text/html")
 
     except Exception as e:
         print("❌ /capture failed:", e, file=sys.stderr)
@@ -81,10 +110,16 @@ def https_date() -> str | None:
     except Exception:
         return None
 
-def do_capture(stock: str) -> tuple[str, str]:
+def encode_image_to_base64(path: str) -> str:
+    import base64
+    with open(path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def do_capture(stock: str) -> tuple[str, str, str]:
     url = f"https://rv.campingworld.com/rv/{stock}"
     tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
-    png_path = os.path.join(tmpdir, f"cw_{stock}.png")
+    price_png_path = os.path.join(tmpdir, f"cw_{stock}_price.png")
+    payment_png_path = os.path.join(tmpdir, f"cw_{stock}_payment.png")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -104,12 +139,14 @@ def do_capture(stock: str) -> tuple[str, str]:
         )
         page = ctx.new_page()
 
+        # Load unit page
         page.goto(url, wait_until="domcontentloaded")
         try:
             page.wait_for_load_state("networkidle", timeout=30_000)
         except Exception:
             pass
 
+        # Set Oregon ZIP
         try:
             page.evaluate(
                 "(zip)=>{try{localStorage.setItem('cw_zip',zip);}catch(e){};document.cookie='cw_zip='+zip+';path=/;SameSite=Lax';}",
@@ -123,10 +160,27 @@ def do_capture(stock: str) -> tuple[str, str]:
         except Exception:
             pass
 
-        page.screenshot(path=png_path, full_page=False)
+        # Capture price hover screenshot
+        price_element = page.query_selector(".price-block a")
+        if price_element:
+            with page.expect_popup() as popup_info:
+                price_element.hover()
+            popup = popup_info.value
+            popup.wait_for_load_state("networkidle")
+            popup.screenshot(path=price_png_path)
+
+        # Capture payment hover screenshot
+        payment_element = page.query_selector(".est-payment-block a")
+        if payment_element:
+            with page.expect_popup() as popup_info:
+                payment_element.hover()
+            popup = popup_info.value
+            popup.wait_for_load_state("networkidle")
+            popup.screenshot(path=payment_png_path)
+
         browser.close()
 
-    return png_path, url
+    return price_png_path, payment_png_path, url
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
