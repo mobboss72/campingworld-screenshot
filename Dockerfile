@@ -44,6 +44,6 @@ RUN mkdir -p /app/ms-playwright && \
 # Copy app code
 COPY . .
 
-# Expose port and set entrypoint
+# Expose port and set entrypoint using shell form for variable expansion
 EXPOSE $PORT
-CMD ["gunicorn", "-w", "1", "--timeout", "180", "-b", "0.0.0.0:$PORT", "server:app"]
+CMD gunicorn -w 1 --timeout 180 -b 0.0.0.0:$PORT server:app
