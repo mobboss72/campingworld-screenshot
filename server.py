@@ -1021,74 +1021,68 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         story.append(Paragraph("Captured Disclosures", styles['Heading2']))
         story.append(Spacer(1, 0.1*inch))
         
-        # Price Disclosure (Top)
+        images_row = []
+        labels_row = []
+        
         if price_path and os.path.exists(price_path):
             try:
-                story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
-                story.append(Spacer(1, 0.05*inch))
-                
                 img = PILImage.open(price_path)
-                # Full width for better readability
-                img_width = 7*inch
+                img_width = 3.25*inch
                 aspect = img.height / img.width
                 target_height = img_width * aspect
                 
-                # Limit height to fit on page
-                if target_height > 3.5*inch:
-                    target_height = 3.5*inch
+                if target_height > 6*inch:
+                    target_height = 6*inch
                     img_width = target_height / aspect
                 
                 img_obj = Image(price_path, width=img_width, height=target_height)
-                
-                # Center the image
-                img_table = Table([[img_obj]], colWidths=[7*inch])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-                ]))
-                story.append(img_table)
-                story.append(Spacer(1, 0.15*inch))
+                images_row.append(img_obj)
+                labels_row.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
             except Exception as e:
                 print(f"⚠ Error processing price image: {e}")
-                story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
-                story.append(Spacer(1, 0.15*inch))
+                images_row.append(Paragraph("Price disclosure\navailable but\ncould not render", styles['Normal']))
+                labels_row.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
         else:
-            story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
-            story.append(Spacer(1, 0.05*inch))
-            story.append(Paragraph("Price disclosure not available", styles['Normal']))
-            story.append(Spacer(1, 0.15*inch))
+            images_row.append(Paragraph("Price disclosure\nnot available", styles['Normal']))
+            labels_row.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
         
-        # Payment Disclosure (Bottom)
         if pay_path and os.path.exists(pay_path):
             try:
-                story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
-                story.append(Spacer(1, 0.05*inch))
-                
                 img = PILImage.open(pay_path)
-                img_width = 7*inch
+                img_width = 3.25*inch
                 aspect = img.height / img.width
                 target_height = img_width * aspect
                 
-                if target_height > 3.5*inch:
-                    target_height = 3.5*inch
+                if target_height > 6*inch:
+                    target_height = 6*inch
                     img_width = target_height / aspect
                 
                 img_obj = Image(pay_path, width=img_width, height=target_height)
-                
-                img_table = Table([[img_obj]], colWidths=[7*inch])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-                ]))
-                story.append(img_table)
-                story.append(Spacer(1, 0.15*inch))
+                images_row.append(img_obj)
+                labels_row.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
             except Exception as e:
                 print(f"⚠ Error processing payment image: {e}")
-                story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
-                story.append(Spacer(1, 0.15*inch))
+                images_row.append(Paragraph("Payment disclosure\navailable but\ncould not render", styles['Normal']))
+                labels_row.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
         else:
-            story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
-            story.append(Spacer(1, 0.05*inch))
-            story.append(Paragraph("Payment disclosure not available", styles['Normal']))
-            story.append(Spacer(1, 0.15*inch))
+            images_row.append(Paragraph("Payment disclosure\nnot available", styles['Normal']))
+            labels_row.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+        
+        label_table = Table([labels_row], colWidths=[3.5*inch, 3.5*inch])
+        label_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ]))
+        story.append(label_table)
+        story.append(Spacer(1, 0.1*inch))
+        
+        img_table = Table([images_row], colWidths=[3.5*inch, 3.5*inch])
+        img_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ]))
+        story.append(img_table)
+        story.append(Spacer(1, 0.2*inch))
         
         story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
         hash_data = [
