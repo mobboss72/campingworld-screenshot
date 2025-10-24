@@ -709,7 +709,12 @@
           Capturing screenshots and generating PDF... This may take 30-60 seconds.
         </div>
       </div>
-
+ <div class="history-section">
+        <a href="/history" class="history-link">
+          <span>📋</span>
+          View Capture History
+        </a>
+      </div>
       <div class="features">
         <div class="feature-card">
           <div class="feature-icon">🔒</div>
@@ -729,44 +734,6 @@
           <p>Accurately simulates browsing from any of 5 Oregon CW locations with GPS coordinates and ZIP codes</p>
         </div>
       </div>
-
-      <div class="capture-section">
-        <h2>Run Capture</h2>
-        <p class="section-description">Enter a CW RV stock number and select your location. The system will spoof GPS coordinates and ZIP codes to match the selected CW location, then capture pricing details with full legal documentation including cryptographic timestamps.</p>
-
-        <form method="POST" action="/capture" id="captureForm">
-          <div class="form-group">
-            <label for="location">CW Location</label>
-            <select name="location" id="location" required>
-              <option value="bend">Bend, OR (97701)</option>
-              <option value="eugene">Eugene, OR (97402)</option>
-              <option value="hillsboro">Hillsboro, OR (97124)</option>
-              <option value="medford">Medford, OR (97504)</option>
-              <option value="portland" selected>Portland, OR (97201)</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label for="stock">Stock Number</label>
-            <input type="text" name="stock" id="stock" placeholder="2319928" required pattern="[0-9]+" title="Please enter numbers only">
-          </div>
-          
-          <button type="submit" id="submitBtn">Run Capture</button>
-        </form>
-
-        <div class="loading" id="loading">
-          <span class="spinner"></span>
-          Capturing screenshots and generating PDF... This may take 30-60 seconds.
-        </div>
-      </div>
-
-      <div class="history-section">
-        <a href="/history" class="history-link">
-          <span>📋</span>
-          View Capture History
-        </a>
-      </div>
-
       <div class="how-it-works" id="how-it-works">
         <h2>How It Works</h2>
         <div class="steps">
