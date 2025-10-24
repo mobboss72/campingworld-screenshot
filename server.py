@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, Page, Locator
 
 # -----------------------------
 # Environment / constants
@@ -78,31 +78,26 @@ def capture():
         if not stock.isdigit():
             return Response("Invalid stock number", status=400)
 
-        price_png, payment_png, combined_png, url, tmpdir = do_capture(stock)
+        price_png, payment_png, url, tmpdir = do_capture(stock)
 
         utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         hdate = https_date()
 
         price_exists = os.path.exists(price_png)
         payment_exists = os.path.exists(payment_png)
-        combined_exists = os.path.exists(combined_png)
 
         sha_price = sha256_file(price_png) if price_exists else "N/A"
         sha_payment = sha256_file(payment_png) if payment_exists else "N/A"
-        sha_combined = sha256_file(combined_png) if combined_exists else "N/A"
 
         # Make IDs to serve images
         tsid = str(int(datetime.datetime.utcnow().timestamp()))
         price_id = f"price_{stock}_{tsid}"
         pay_id = f"payment_{stock}_{tsid}"
-        both_id = f"both_{stock}_{tsid}"
 
         if price_exists: screenshot_cache[price_id] = price_png
         if payment_exists: screenshot_cache[pay_id] = payment_png
-        if combined_exists: screenshot_cache[both_id] = combined_png
 
-        # Lightweight changelog line
-        notes = f"price={'ok' if price_exists else 'fail'}, payment={'ok' if payment_exists else 'fail'}, combined={'ok' if combined_exists else 'fail'}"
+        notes = f"price={'ok' if price_exists else 'fail'}, payment={'ok' if payment_exists else 'fail'}"
         log_changelog(stock, url, tmpdir, notes)
 
         html = render_template_string("""
@@ -161,27 +156,14 @@ def capture():
       </div>
       <p><strong>SHA-256:</strong> <code>{{ sha_payment }}</code></p>
     </div>
-
-    <div class="box">
-      <h3>Combined — Best Effort (Both Visible)</h3>
-      <div class="imgwrap">
-        {% if combined_exists %}
-          <img src="/screenshot/{{ both_id }}" alt="Both Tooltips" />
-          <p class="success">✓ Captured</p>
-        {% else %}
-          <p class="error">✗ Site closed one tooltip when opening the other</p>
-        {% endif %}
-      </div>
-      <p><strong>SHA-256:</strong> <code>{{ sha_combined }}</code></p>
-    </div>
   </div>
 </body>
 </html>
         """,
         stock=stock, url=url, utc=utc_now, hdate=hdate,
-        price_exists=price_exists, payment_exists=payment_exists, combined_exists=combined_exists,
-        price_id=price_id, pay_id=pay_id, both_id=both_id,
-        sha_price=sha_price, sha_payment=sha_payment, sha_combined=sha_combined)
+        price_exists=price_exists, payment_exists=payment_exists,
+        price_id=price_id, pay_id=pay_id,
+        sha_price=sha_price, sha_payment=sha_payment)
 
         return Response(html, mimetype="text/html")
     except Exception as e:
@@ -192,9 +174,9 @@ def capture():
 # -----------------------------
 # Core capture logic
 # -----------------------------
-def do_capture(stock: str) -> Tuple[str, str, str, str, str]:
+def do_capture(stock: str) -> Tuple[str, str, str, str]:
     """
-    Returns (price_png, payment_png, combined_png, url, tmpdir)
+    Returns (price_png, payment_png, url, tmpdir)
     """
     url = f"https://rv.campingworld.com/rv/{stock}"
     tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
@@ -202,10 +184,12 @@ def do_capture(stock: str) -> Tuple[str, str, str, str, str]:
 
     price_png = os.path.join(tmpdir, f"cw_{stock}_price_{ts}.png")
     payment_png = os.path.join(tmpdir, f"cw_{stock}_payment_{ts}.png")
-    both_png = os.path.join(tmpdir, f"cw_{stock}_both_{ts}.png")
 
     print(f"\n=== Starting capture for stock {stock} ===")
     print(f"Temp dir: {tmpdir}\nURL: {url}")
+
+    utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    hdate = https_date()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -242,42 +226,106 @@ def do_capture(stock: str) -> Tuple[str, str, str, str, str]:
         except Exception as e:
             print(f"ZIP inject failed: {e}")
 
-        # ---- Finders & activators ----
-        def find_price_trigger():
-            """
-            Try multiple ways to find the price tooltip trigger (often an info icon near the main price).
-            """
-            candidates = [
-                # common info icon near price line
-                page.locator("xpath=//*[contains(translate(., 'PRICE', 'price'),'price')]/following::*[contains(@class,'MuiSvgIcon-root')][1]"),
-                # any visible icon within a 'price' row
-                page.locator("xpath=//*[contains(translate(., 'PRICE', 'price'),'price')]//following::*[name()='svg'][1]"),
-                # fallback: large dollar value line, then following icon
-                page.locator("xpath=(//*[matches(., '\\$\\s*\\d[\\d,]*(\\.\\d{2})?')])[1]/following::*[contains(@class,'MuiSvgIcon-root')][1]"),
-            ]
-            for cand in candidates:
-                try:
-                    if cand.count() and cand.first.is_visible():
-                        return cand.first
-                except Exception:
-                    pass
-            # final fallback: hover the price text itself
-            texty = [
+        # ----- helpers -----
+        def inject_banner(page: Page, label: str):
+            """Overlay legal time markers inside the page so they're baked into the PNG."""
+            page.evaluate(
+                """(text)=>{
+                    const id='cw-proof-banner';
+                    let el=document.getElementById(id);
+                    if(!el){
+                      el=document.createElement('div');
+                      el.id=id;
+                      Object.assign(el.style,{
+                        position:'fixed', top:'10px', right:'10px', zIndex: 2147483647,
+                        background:'rgba(0,0,0,0.72)', color:'#fff',
+                        padding:'8px 10px', font:'12px/1.35 -apple-system,Segoe UI,Arial',
+                        borderRadius:'6px', boxShadow:'0 2px 8px rgba(0,0,0,.35)',
+                        maxWidth:'420px', pointerEvents:'none'
+                      });
+                      document.body.appendChild(el);
+                    }
+                    el.textContent=text;
+                }""",
+                f"{label} • UTC {utc_now} • HTTPS Date {hdate or 'unavailable'}"
+            )
+
+        def remove_banner(page: Page):
+            page.evaluate("""()=>{
+                const el=document.getElementById('cw-proof-banner'); if(el) el.remove();
+            }""")
+
+        def is_tooltip_open(page: Page) -> bool:
+            t = page.locator("[role='tooltip'], .MuiTooltip-popper, [data-popper-placement], .MuiPopover-root")
+            try:
+                return t.first.is_visible()
+            except Exception:
+                return False
+
+        def activate_tooltip(trigger: Optional[Locator], label: str) -> bool:
+            if trigger is None:
+                return False
+            try:
+                trigger.scroll_into_view_if_needed(timeout=5000)
+                page.wait_for_timeout(120)
+            except Exception:
+                pass
+
+            # Try hover
+            try:
+                trigger.hover(force=True, timeout=5000)
+                page.wait_for_timeout(250)
+                if is_tooltip_open(page): return True
+            except Exception:
+                pass
+            # Try focus
+            try:
+                trigger.focus()
+                page.wait_for_timeout(200)
+                if is_tooltip_open(page): return True
+            except Exception:
+                pass
+            # Synthetic events (helps when hover handlers are attached above)
+            try:
+                page.evaluate("""(el)=>{
+                    ['pointerover','mouseenter','mouseover','focusin'].forEach(t=>el.dispatchEvent(new MouseEvent(t,{bubbles:true})));
+                }""", trigger)
+                page.wait_for_timeout(250)
+                if is_tooltip_open(page): return True
+            except Exception:
+                pass
+            # Click (some popovers)
+            try:
+                trigger.click(timeout=3000)
+                page.wait_for_timeout(250)
+                if is_tooltip_open(page): return True
+            except Exception:
+                pass
+            return False
+
+        # ---- PRICE trigger (more robust) ----
+        def find_price_trigger(page: Page) -> Optional[Locator]:
+            cands = [
+                # Icon immediately following a big price dollar amount
+                page.locator("xpath=(//*[matches(., '\\$\\s*\\d[\\d,]*(\\.\\d{2})?')])[1]/following::*[(self::*[name()='svg'] or contains(@class,'MuiSvgIcon-root') or self::button)][1]"),
+                # Any element containing 'price' with a following icon
+                page.locator("xpath=//*[contains(translate(., 'PRICE','price'),'price')]/following::*[(self::*[name()='svg'] or contains(@class,'MuiSvgIcon-root') or self::button)][1]"),
+                # Sometimes the label itself is the trigger
+                page.locator("xpath=(//*[contains(translate(., 'PRICE','price'),'price')])[1]"),
+                # Fallback: the big dollar amount node
                 page.locator("xpath=(//*[matches(., '\\$\\s*\\d[\\d,]*(\\.\\d{2})?')])[1]"),
-                page.get_by_text("$", exact=False)
             ]
-            for t in texty:
+            for cand in cands:
                 try:
-                    if t.count() and t.first.is_visible():
-                        return t.first
+                    if cand.count():
+                        if cand.first.is_visible():
+                            return cand.first
                 except Exception:
-                    pass
+                    continue
             return None
 
-        def find_payment_trigger():
-            """
-            Payment tooltip trigger (often an info icon next to '/mo' text).
-            """
+        # ---- PAYMENT trigger (text-first + neighbor icon) ----
+        def find_payment_trigger(page: Page) -> Optional[Locator]:
             payment_text = None
             text_cands = [
                 page.get_by_text("/mo", exact=False),
@@ -311,109 +359,43 @@ def do_capture(stock: str) -> Tuple[str, str, str, str, str]:
                 return payment_text
             return None
 
-        def activate_tooltip(trigger, page, settle_ms=400) -> bool:
-            """Try multiple strategies to open a MUI tooltip/popover."""
-            if trigger is None:
-                return False
-            tooltip = page.locator("[role='tooltip'], .MuiTooltip-popper, [data-popper-placement], .MuiPopover-root")
-
-            def is_open():
-                try:
-                    return tooltip.first.is_visible()
-                except Exception:
-                    return False
-
-            try:
-                trigger.scroll_into_view_if_needed(timeout=5000)
-                page.wait_for_timeout(150)
-            except Exception:
-                pass
-
-            # Hover
-            try:
-                trigger.hover(force=True, timeout=5000)
-                page.wait_for_timeout(settle_ms)
-                if is_open(): return True
-            except Exception:
-                pass
-            # Focus
-            try:
-                trigger.focus()
-                page.wait_for_timeout(settle_ms)
-                if is_open(): return True
-            except Exception:
-                pass
-            # Synthetic events
-            try:
-                page.evaluate("""(el)=>{
-                    ['pointerover','mouseenter','mouseover','focusin'].forEach(t=>el.dispatchEvent(new MouseEvent(t,{bubbles:true})));
-                }""", trigger)
-                page.wait_for_timeout(settle_ms)
-                if is_open(): return True
-            except Exception:
-                pass
-            # Click (some popovers use click)
-            try:
-                trigger.click(timeout=3000)
-                page.wait_for_timeout(settle_ms)
-                if is_open(): return True
-            except Exception:
-                pass
-            return False
-
-        # ---- PRICE TOOLTIP ----
+        # ===== PRICE =====
         print("\n=== PRICE tooltip ===")
-        price_trigger = find_price_trigger()
-        price_ok = activate_tooltip(price_trigger, page, settle_ms=500)
+        price_trigger = find_price_trigger(page)
+        price_open = activate_tooltip(price_trigger, "Price Tooltip")
+        inject_banner(page, "Price Tooltip")
         try:
             page.screenshot(path=price_png, full_page=True)
-            print(f"Price capture saved -> {price_png} (open={price_ok})")
+            print(f"Price capture saved -> {price_png} (open={price_open})")
         except Exception as e:
             print(f"Price screenshot failed: {e}")
+        finally:
+            remove_banner(page)
 
-        # ---- PAYMENT TOOLTIP ----
+        # Close any popover that might stay open to avoid obstructing payment
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(150)
+        except Exception:
+            pass
+
+        # ===== PAYMENT =====
         print("\n=== PAYMENT tooltip ===")
-        payment_trigger = find_payment_trigger()
-        payment_ok = activate_tooltip(payment_trigger, page, settle_ms=500)
+        payment_trigger = find_payment_trigger(page)
+        payment_open = activate_tooltip(payment_trigger, "Payment Tooltip")
+        inject_banner(page, "Payment Tooltip")
         try:
             page.screenshot(path=payment_png, full_page=True)
-            print(f"Payment capture saved -> {payment_png} (open={payment_ok})")
+            print(f"Payment capture saved -> {payment_png} (open={payment_open})")
         except Exception as e:
             print(f"Payment screenshot failed: {e}")
-
-        # ---- COMBINED (best effort) ----
-        # Strategy:
-        # 1) Open PRICE (focus or synthetic so mouse doesn't move)
-        # 2) Without moving pointer, synth-activate PAYMENT
-        # Some sites still close one when the other opens; we accept that.
-        print("\n=== COMBINED tooltip attempt ===")
-        combined_ok = False
-        try:
-            # Try to keep price open with focus first
-            if price_trigger:
-                page.evaluate("""(el)=>{ el.focus(); }""", price_trigger)
-                page.wait_for_timeout(250)
-
-            if payment_trigger:
-                page.evaluate("""(el)=>{
-                    ['pointerover','mouseenter','mouseover','focusin'].forEach(t=>el.dispatchEvent(new MouseEvent(t,{bubbles:true})));
-                }""", payment_trigger)
-                page.wait_for_timeout(500)
-
-            # Quick presence check: do we see at least one tooltip container twice?
-            tt = page.locator("[role='tooltip'], .MuiTooltip-popper, [data-popper-placement], .MuiPopover-root")
-            if tt.count() >= 2:
-                combined_ok = True
-
-            page.screenshot(path=both_png, full_page=True)
-            print(f"Combined capture saved -> {both_png} (maybe_open={combined_ok})")
-        except Exception as e:
-            print(f"Combined capture failed: {e}")
+        finally:
+            remove_banner(page)
 
         browser.close()
         print("=== Done ===")
 
-    return price_png, payment_png, both_png, url, tmpdir
+    return price_png, payment_png, url, tmpdir
 
 # -----------------------------
 # Entry
