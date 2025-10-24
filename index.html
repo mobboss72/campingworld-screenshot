@@ -127,7 +127,7 @@
       font-size: 24px;
       font-weight: 400;
       color: var(--text-secondary);
-      margin-bottom: 48px;
+      margin-bottom: 48px; /* Reduced margin since button is removed */
       max-width: 640px;
       margin-left: auto;
       margin-right: auto;
@@ -429,8 +429,7 @@
       <div class="container">
         <h1>Automated Compliance Capture</h1>
         <p class="subtitle">Securely capture and timestamp RV price and payment disclosures for audit-ready compliance reports.</p>
-        <a href="#capture" class="button">Start Capture Now</a>
-      </div>
+        </div>
     </section>
 
     <section class="capture-section" id="capture">
@@ -539,16 +538,13 @@
     const loading = document.getElementById('loading');
 
     form.addEventListener('submit', function(e) {
-      // Prevent default submit immediately to allow the UI to update
       e.preventDefault(); 
       
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Capturing...'; // Updated button text
+      submitBtn.textContent = 'Running Capture...';
       loading.classList.add('active');
 
-      // Defer the actual form submission slightly to ensure the browser 
-      // renders the spinner and message immediately before the synchronous 
-      // POST request blocks the thread.
+      // Use a brief timeout before submitting to allow the UI update to render
       setTimeout(() => {
           form.submit();
       }, 10);
