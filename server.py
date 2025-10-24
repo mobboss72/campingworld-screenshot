@@ -337,12 +337,11 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         # ===== CAPTURE PAYMENT HOVER SCREENSHOT =====
         print("\n=== Capturing Payment Hover ===")
         
-        # Based on inspect element: The payment has body2 class inside the hover trigger
-        # We need to find the element that triggers MuiTooltip
+        # Look for the payment element that triggers the tooltip
         payment_selectors = [
-            ".MuiTypography-root.MuiTypography-body2:has-text('Est. Payment')",  # body2 with Est. Payment text
-            "div:has-text('Est. Payment') .MuiTypography-body2",  # body2 inside Est. Payment div
-            ".MuiTypography-body2:visible",  # Any visible body2 typography
+            ".MuiTypography-root.MuiTypography-body2:has-text('Est. Payment')",
+            "div:has-text('Est. Payment') .MuiTypography-body2",
+            ".MuiTypography-body2:visible",
         ]
         
         payment_captured = False
@@ -361,30 +360,41 @@ def do_capture(stock: str) -> tuple[str, str, str]:
                         elem = payment_elements.nth(i)
                         try:
                             if elem.is_visible():
-                                # Check if this element contains payment-related text
                                 text_content = elem.inner_text().lower()
                                 print(f"  Element {i} text: {text_content[:100]}")
                                 
                                 # Look for Est. Payment specifically
                                 if 'est' in text_content and 'payment' in text_content:
-                                    print(f"  Element {i} is the payment element, hovering...")
+                                    print(f"  Found payment element at index {i}, triggering hover...")
                                     elem.scroll_into_view_if_needed(timeout=5000)
                                     
-                                    # Use JavaScript to trigger mouseover event (more reliable)
-                                    page.evaluate('''(element) => {
-                                        const event = new MouseEvent('mouseover', {
-                                            bubbles: true,
-                                            cancelable: true,
-                                            view: window
-                                        });
-                                        element.dispatchEvent(event);
-                                    }''', elem.element_handle())
-                                    
-                                    # Also do regular hover
+                                    # Hover over the element
                                     elem.hover(timeout=10000, force=True)
+                                    print("  Hover activated, waiting for tooltip...")
                                     
-                                    # Wait longer for tooltip to appear
-                                    page.wait_for_timeout(2500)
+                                    # Wait for the tooltip to appear using the exact classes from inspect element
+                                    try:
+                                        page.wait_for_selector(
+                                            ".MuiTooltip-tooltip.MuiTooltip-tooltipArrow.MuiTooltip-tooltipPlacementBottom",
+                                            state="visible",
+                                            timeout=5000
+                                        )
+                                        print("  ✅ Tooltip appeared!")
+                                    except Exception as tooltip_error:
+                                        print(f"  ⚠️ Tooltip wait timeout: {tooltip_error}")
+                                        # Try alternate tooltip selector
+                                        try:
+                                            page.wait_for_selector(
+                                                ".MuiTooltip-popper",
+                                                state="visible",
+                                                timeout=2000
+                                            )
+                                            print("  ✅ Tooltip popper appeared!")
+                                        except:
+                                            print("  ⚠️ No tooltip detected, proceeding anyway")
+                                    
+                                    # Extra wait to ensure tooltip is fully rendered
+                                    page.wait_for_timeout(1000)
                                     
                                     # Take screenshot
                                     page.screenshot(path=payment_png_path, full_page=True)
