@@ -20,7 +20,7 @@ PORT = int(os.getenv("PORT", "8080"))
 DB_PATH = os.getenv("DB_PATH", "/app/data/captures.db")
 
 # Storage configuration
-STORAGE_MODE = os.getenv("STORAGE_MODE", "ephemeral")  # "ephemeral" or "persistent"
+STORAGE_MODE = os.getenv("STORAGE_MODE", "ephemeral")
 PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", "/app/data/captures")
 AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "7"))
 
@@ -41,7 +41,7 @@ TSA_URLS = [
     "http://rfc3161timestamp.globalsign.com/advanced",
 ]
 
-screenshot_cache: dict[str, str] = {}
+screenshot_cache = {}
 
 app = Flask(__name__, static_folder=None)
 
@@ -104,14 +104,12 @@ def cleanup_old_files(days_old=7):
         cutoff_time = time.time() - (days_old * 24 * 60 * 60)
         cleaned_count = 0
         
-        # Clean up temp directories
         temp_base = tempfile.gettempdir()
         for item in os.listdir(temp_base):
             if item.startswith("cw-"):
                 item_path = os.path.join(temp_base, item)
                 try:
                     if os.path.isdir(item_path):
-                        # Check if directory is old enough
                         dir_mtime = os.path.getmtime(item_path)
                         if dir_mtime < cutoff_time:
                             import shutil
@@ -129,8 +127,7 @@ def cleanup_old_files(days_old=7):
 
 @app.get("/admin/cleanup")
 def admin_cleanup():
-    """Manual cleanup endpoint (protect this in production!)"""
-    # TODO: Add authentication here
+    """Manual cleanup endpoint"""
     days = request.args.get("days", 7, type=int)
     count = cleanup_old_files(days)
     return jsonify({"cleaned": count, "days_old": days})
@@ -139,16 +136,13 @@ def admin_cleanup():
 def admin_storage():
     """View storage status"""
     try:
-        # Count captures in database
         with get_db() as conn:
             total_captures = conn.execute("SELECT COUNT(*) as count FROM captures").fetchone()['count']
             
-            # Count existing files
             existing_pdfs = conn.execute(
                 "SELECT COUNT(*) as count FROM captures WHERE pdf_path IS NOT NULL"
             ).fetchone()['count']
             
-            # Check which files still exist
             files_exist = 0
             files_missing = 0
             for row in conn.execute("SELECT pdf_path FROM captures WHERE pdf_path IS NOT NULL"):
@@ -157,7 +151,6 @@ def admin_storage():
                 else:
                     files_missing += 1
         
-        # Calculate temp directory size
         temp_size = 0
         temp_dirs = 0
         temp_base = tempfile.gettempdir()
@@ -198,7 +191,7 @@ def root():
     return send_from_directory(".", "index.html")
 
 @app.get("/screenshot/<sid>")
-def serve_shot(sid: str):
+def serve_shot(sid):
     path = screenshot_cache.get(sid)
     if not path or not os.path.exists(path):
         return Response("Screenshot not found", status=404)
@@ -274,26 +267,23 @@ def history():
     return Response(html, mimetype="text/html")
 
 @app.get("/view/<int:capture_id>")
-def view_capture(capture_id: int):
+def view_capture(capture_id):
     with get_db() as conn:
         capture = conn.execute("SELECT * FROM captures WHERE id = ?", (capture_id,)).fetchone()
     
     if not capture:
         return Response("Capture not found", status=404)
     
-    # Check if stored PDF exists
     if capture['pdf_path'] and os.path.exists(capture['pdf_path']):
         return send_file(capture['pdf_path'], mimetype="application/pdf", as_attachment=True,
                         download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf")
     
-    # If PDF doesn't exist, regenerate it from screenshots (if they still exist)
     price_path = capture['price_screenshot_path']
     pay_path = capture['payment_screenshot_path']
     
     if (price_path and os.path.exists(price_path)) or (pay_path and os.path.exists(pay_path)):
         print(f"📄 Regenerating PDF for capture {capture_id}")
         
-        # Reconstruct RFC timestamp info if available
         rfc_price = None
         rfc_pay = None
         if capture['price_tsa']:
@@ -356,7 +346,6 @@ def capture():
         sha_price = sha256_file(price_path) if price_ok else "N/A"
         sha_pay   = sha256_file(pay_path)   if pay_ok   else "N/A"
 
-        # Get RFC 3161 timestamps (but don't fail if unavailable)
         rfc_price = None
         rfc_pay = None
         try:
@@ -369,7 +358,6 @@ def capture():
         except Exception as e:
             print(f"⚠ RFC 3161 timestamp failed for payment: {e}")
 
-        # Generate PDF
         pdf_path = None
         if price_ok or pay_ok:
             try:
@@ -393,7 +381,6 @@ def capture():
                 traceback.print_exc()
                 pdf_path = None
 
-        # Save to database (even if PDF failed)
         capture_id = None
         try:
             with get_db() as conn:
@@ -419,12 +406,10 @@ def capture():
             print(f"⚠ Database save failed: {e}")
             traceback.print_exc()
 
-        # Return PDF download if available
         if pdf_path and os.path.exists(pdf_path):
             return send_file(pdf_path, mimetype="application/pdf", as_attachment=True,
                            download_name=f"CW_Capture_{stock}_{capture_id or 'temp'}.pdf")
         else:
-            # Return error page with debug info if PDF failed
             error_html = f"""
 <!doctype html>
 <html>
@@ -461,7 +446,6 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
                  rfc_price, rfc_pay, debug_info):
     """Generate PDF report with screenshots side by side"""
     try:
-        # Determine tmpdir from available path
         if price_path:
             tmpdir = os.path.dirname(price_path)
         elif pay_path:
@@ -479,7 +463,6 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         story = []
         styles = getSampleStyleSheet()
         
-        # Title
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
@@ -491,7 +474,6 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         story.append(Paragraph("Camping World Compliance Capture Report", title_style))
         story.append(Spacer(1, 0.2*inch))
         
-        # Metadata table
         meta_data = [
             ['Stock Number:', stock],
             ['Location:', f"{location} (ZIP: {zip_code})"],
@@ -513,14 +495,13 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         story.append(meta_table)
         story.append(Spacer(1, 0.2*inch))
         
-        # RFC 3161 Timestamps
         if rfc_price or rfc_pay:
             story.append(Paragraph("Cryptographic Timestamps (RFC 3161)", styles['Heading2']))
             ts_data = []
             if rfc_price:
-                ts_data.append(['Price Screenshot:', f"{rfc_price['timestamp']} | TSA: {rfc_price['tsa']}"])
+                ts_data.append(['Price Disclosure:', f"{rfc_price['timestamp']} | TSA: {rfc_price['tsa']}"])
             if rfc_pay:
-                ts_data.append(['Payment Screenshot:', f"{rfc_pay['timestamp']} | TSA: {rfc_pay['tsa']}"])
+                ts_data.append(['Payment Disclosure:', f"{rfc_pay['timestamp']} | TSA: {rfc_pay['tsa']}"])
             
             ts_table = Table(ts_data, colWidths=[2*inch, 5*inch])
             ts_table.setStyle(TableStyle([
@@ -533,39 +514,34 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             story.append(ts_table)
             story.append(Spacer(1, 0.2*inch))
         
-        # Screenshots side by side
-        story.append(Paragraph("Captured Screenshots", styles['Heading2']))
+        story.append(Paragraph("Captured Disclosures", styles['Heading2']))
         story.append(Spacer(1, 0.1*inch))
         
         images_row = []
         labels_row = []
         
-        # Price screenshot
         if price_path and os.path.exists(price_path):
             try:
-                # Open and resize image
                 img = PILImage.open(price_path)
                 img_width = 3.25*inch
                 aspect = img.height / img.width
                 target_height = img_width * aspect
                 
-                # Limit height
                 if target_height > 6*inch:
                     target_height = 6*inch
                     img_width = target_height / aspect
                 
                 img_obj = Image(price_path, width=img_width, height=target_height)
                 images_row.append(img_obj)
-                labels_row.append(Paragraph("<b>Price Tooltip</b>", styles['Normal']))
+                labels_row.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
             except Exception as e:
                 print(f"⚠ Error processing price image: {e}")
-                images_row.append(Paragraph("Price screenshot\navailable but\ncould not render", styles['Normal']))
-                labels_row.append(Paragraph("<b>Price Tooltip</b>", styles['Normal']))
+                images_row.append(Paragraph("Price disclosure\navailable but\ncould not render", styles['Normal']))
+                labels_row.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
         else:
-            images_row.append(Paragraph("Price screenshot\nnot available", styles['Normal']))
-            labels_row.append(Paragraph("<b>Price Tooltip</b>", styles['Normal']))
+            images_row.append(Paragraph("Price disclosure\nnot available", styles['Normal']))
+            labels_row.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
         
-        # Payment screenshot
         if pay_path and os.path.exists(pay_path):
             try:
                 img = PILImage.open(pay_path)
@@ -579,16 +555,15 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
                 
                 img_obj = Image(pay_path, width=img_width, height=target_height)
                 images_row.append(img_obj)
-                labels_row.append(Paragraph("<b>Payment Tooltip</b>", styles['Normal']))
+                labels_row.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
             except Exception as e:
                 print(f"⚠ Error processing payment image: {e}")
-                images_row.append(Paragraph("Payment screenshot\navailable but\ncould not render", styles['Normal']))
-                labels_row.append(Paragraph("<b>Payment Tooltip</b>", styles['Normal']))
+                images_row.append(Paragraph("Payment disclosure\navailable but\ncould not render", styles['Normal']))
+                labels_row.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
         else:
-            images_row.append(Paragraph("Payment screenshot\nnot available", styles['Normal']))
-            labels_row.append(Paragraph("<b>Payment Tooltip</b>", styles['Normal']))
+            images_row.append(Paragraph("Payment disclosure\nnot available", styles['Normal']))
+            labels_row.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
         
-        # Add labels then images
         label_table = Table([labels_row], colWidths=[3.5*inch, 3.5*inch])
         label_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -605,11 +580,10 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         story.append(img_table)
         story.append(Spacer(1, 0.2*inch))
         
-        # SHA-256 Hashes
         story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
         hash_data = [
-            ['Price Screenshot:', sha_price],
-            ['Payment Screenshot:', sha_pay],
+            ['Price Disclosure:', sha_price],
+            ['Payment Disclosure:', sha_pay],
         ]
         hash_table = Table(hash_data, colWidths=[2*inch, 5*inch])
         hash_table.setStyle(TableStyle([
@@ -620,7 +594,6 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         ]))
         story.append(hash_table)
         
-        # Build PDF
         doc.build(story)
         print(f"✓ PDF generated successfully: {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
         return pdf_path
@@ -630,21 +603,21 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         traceback.print_exc()
         return None
 
-def sha256_file(path: str) -> str:
+def sha256_file(path):
     if not path or not os.path.exists(path): return "N/A"
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024*1024), b""): h.update(chunk)
     return h.hexdigest()
 
-def https_date() -> str | None:
+def https_date():
     try:
         r = requests.head("https://cloudflare.com", timeout=8)
         return r.headers.get("Date")
     except Exception:
         return None
 
-def get_rfc3161_timestamp(file_path: str) -> dict | None:
+def get_rfc3161_timestamp(file_path):
     """Get RFC 3161 timestamp for a file from a public TSA."""
     if not file_path or not os.path.exists(file_path):
         return None
@@ -688,16 +661,14 @@ def get_rfc3161_timestamp(file_path: str) -> dict | None:
     print(f"  ✗ All TSAs failed for {os.path.basename(file_path)}")
     return None
 
-def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
+def find_and_trigger_tooltip(page, label_text, tooltip_name):
     """Enhanced tooltip triggering with multiple fallback strategies."""
     debug = []
     debug.append(f"Attempting to trigger {tooltip_name} tooltip for label: '{label_text}'")
     
     try:
-        # Wait a bit for page to stabilize
         page.wait_for_timeout(1500)
         
-        # Try to find all instances of the label
         all_labels = page.locator(f"text={label_text}").all()
         debug.append(f"Found {len(all_labels)} instances of '{label_text}'")
         
@@ -705,11 +676,9 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
             debug.append(f"❌ No instances found - element may not exist on page")
             return False, "\n".join(debug)
         
-        # Try each visible instance
         success = False
         for idx, label in enumerate(all_labels):
             try:
-                # Check if this instance is visible
                 is_visible = label.is_visible(timeout=1000)
                 if not is_visible:
                     debug.append(f"  Instance {idx}: not visible, skipping")
@@ -717,14 +686,11 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
                 
                 debug.append(f"  Instance {idx}: visible, attempting trigger")
                 
-                # Scroll to this label
                 label.scroll_into_view_if_needed(timeout=3000)
                 page.wait_for_timeout(800)
                 
-                # Try multiple strategies to find the info icon
                 icon_found = False
                 
-                # Strategy 1: Parent element contains SVG
                 try:
                     parent = label.locator("xpath=..").first
                     svg_icons = parent.locator("svg.MuiSvgIcon-root").all()
@@ -735,11 +701,8 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
                         try:
                             if svg_icon.is_visible(timeout=500):
                                 debug.append(f"    Attempting to click SVG icon {svg_idx}...")
-                                
-                                # Try regular click first
                                 svg_icon.click(timeout=2000, force=True)
                                 page.wait_for_timeout(1000)
-                                
                                 icon_found = True
                                 debug.append(f"    ✓ Clicked SVG icon {svg_idx}")
                                 break
@@ -750,7 +713,6 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
                 except Exception as e:
                     debug.append(f"    Parent SVG search failed: {str(e)[:100]}")
                 
-                # Strategy 2: Look for info icon with specific attributes
                 if not icon_found:
                     try:
                         debug.append(f"    Trying data-testid selectors...")
@@ -779,7 +741,6 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
                     except Exception as e:
                         debug.append(f"    data-testid search failed: {str(e)[:100]}")
                 
-                # Strategy 3: Hover the label itself as last resort
                 if not icon_found:
                     debug.append(f"    No icon found, hovering label as fallback...")
                     try:
@@ -789,7 +750,6 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
                     except Exception as e:
                         debug.append(f"    Hover failed: {str(e)[:100]}")
                 
-                # Wait for tooltip to appear with multiple selectors
                 page.wait_for_timeout(1500)
                 
                 tooltip_selectors = [
@@ -806,7 +766,7 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
                         for tooltip in tooltips:
                             if tooltip.is_visible(timeout=1000):
                                 debug.append(f"    ✓ Tooltip visible with: {selector}")
-                                page.wait_for_timeout(1000)  # Extra wait for animation
+                                page.wait_for_timeout(1000)
                                 tooltip_found = True
                                 success = True
                                 break
@@ -825,33 +785,26 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
                 debug.append(f"  Instance {idx} failed: {str(e)[:150]}")
                 continue
         
-        # Final JavaScript fallback if nothing worked
         if not success:
             debug.append("⚠ All standard methods failed, trying JavaScript injection...")
             try:
                 result = page.evaluate(f"""
                     () => {{
-                        // Find all elements containing the label text
                         const labels = Array.from(document.querySelectorAll('*'))
                             .filter(el => el.textContent.trim() === '{label_text}');
                         
                         console.log('JS: Found', labels.length, 'label elements');
                         
                         for (const label of labels) {{
-                            // Look for SVG in parent or siblings
                             const parent = label.parentElement;
                             if (!parent) continue;
                             
                             const svg = parent.querySelector('svg');
                             if (svg) {{
                                 console.log('JS: Found SVG, triggering events');
-                                
-                                // Scroll into view
                                 svg.scrollIntoView({{behavior: 'smooth', block: 'center'}});
                                 
-                                // Wait a bit
                                 setTimeout(() => {{
-                                    // Trigger all possible mouse events
                                     ['mouseenter', 'mouseover', 'mousemove', 'click'].forEach(eventType => {{
                                         svg.dispatchEvent(new MouseEvent(eventType, {{
                                             bubbles: true,
@@ -872,7 +825,6 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
                     page.wait_for_timeout(2000)
                     debug.append("✓ JavaScript fallback executed - events dispatched")
                     
-                    # Check for tooltip again
                     for selector in tooltip_selectors:
                         try:
                             if page.locator(selector).first.is_visible(timeout=2000):
@@ -894,10 +846,9 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
         traceback.print_exc()
         return False, "\n".join(debug)
 
-def do_capture(stock: str, zip_code: str, location_name: str, latitude: float, longitude: float) -> tuple[str | None, str | None, str, str]:
+def do_capture(stock, zip_code, location_name, latitude, longitude):
     url = f"https://rv.campingworld.com/rv/{stock}"
     
-    # Choose storage location based on mode
     if STORAGE_MODE == "persistent" and PERSISTENT_STORAGE_PATH:
         os.makedirs(PERSISTENT_STORAGE_PATH, exist_ok=True)
         tmpdir = os.path.join(PERSISTENT_STORAGE_PATH, f"cw-{stock}-{int(time.time())}")
