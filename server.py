@@ -10,6 +10,7 @@ import requests
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file
 from playwright.sync_api import sync_playwright
 
+# Persist Playwright browsers on disk
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 
 PORT = int(os.getenv("PORT", "8080"))
@@ -196,20 +197,20 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         except Exception:
             pass
 
-        # ----- PRICE (kept as the working variant) -----
+        # ----- PRICE (kept as your working variant) -----
         try:
             try:
                 page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", timeout=8_000)
             except Exception:
                 print("price subtitle1 wait timeout (continue)")
 
-            cand = page.locator(".MuiTypography-root.MuiTypography-subtitle1")
-            cnt = cand.count()
+            cands = page.locator(".MuiTypography-root.MuiTypography-subtitle1")
+            cnt = cands.count()
             print(f"price candidates={cnt}")
 
             visible_price = None
             for i in range(cnt):
-                e = cand.nth(i)
+                e = cands.nth(i)
                 if e.is_visible():
                     visible_price = e
                     txt = (e.text_content() or "").strip()
@@ -231,67 +232,90 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         except Exception as e:
             print(f"ERROR price: {e}")
 
-        # ----- PAYMENT (geometry-nearest Info icon) -----
+        # ----- PAYMENT (right-rail container + nearest icon) -----
         try:
-            pay_anchor = page.locator(
-                "xpath=//*[contains(normalize-space(.), '/mo') "
-                "or contains(translate(normalize-space(.),'PAYMENT','payment'),'payment') "
-                "or contains(translate(normalize-space(.),'MONTH','month'),'month')]"
-            ).first
-            print("payment anchor via /mo|payment|month")
+            # 1) Identify the right-rail container via its distinctive buttons/text.
+            container = page.evaluate_handle("""
+              () => {
+                function up(el){
+                  let n=el;
+                  for(let i=0;i<6 && n;i++){ // climb a few levels to wrap the right rail
+                    n = n.parentElement;
+                    if(!n) break;
+                    const w = n.getBoundingClientRect().width;
+                    if (w > 300 && w < 800) return n; // right-rail width band
+                  }
+                  return null;
+                }
+                const btn = document.querySelector('button:has(> span:matches-css(^Schedule Appointment$)), button:has(> span:matches-css(^Make an Offer$))');
+                const priceLabel = Array.from(document.querySelectorAll('*')).find(n => /Total Price/i.test(n.textContent||''));
+                return up(btn||priceLabel) || document.body;
+              }
+            """)
+            # 2) Anchor on "/mo" (or 'payment'/'month') within the container only.
+            anchor = page.evaluate_handle("""
+              (box) => {
+                const within = box || document;
+                const els = within.querySelectorAll('*');
+                for (const el of els) {
+                  const t = (el.textContent||'').trim();
+                  if (!t) continue;
+                  const s = t.toLowerCase();
+                  if (s.includes('/mo') || s.includes('payment') || s.includes('month')) {
+                    const r = el.getBoundingClientRect();
+                    if (r.width && r.height) return el;
+                  }
+                }
+                return null;
+              }
+            """, container)
 
-            if not pay_anchor or pay_anchor.count() == 0:
-                raise RuntimeError("payment anchor not found")
+            if not anchor:
+                raise RuntimeError("payment: anchor not found in panel")
 
-            pay_anchor.scroll_into_view_if_needed(timeout=5000)
+            page.evaluate("(el)=>el.scrollIntoView({block:'center',inline:'center'})", anchor)
             print("payment anchor scrolled into view")
 
-            # Find nearest info icon by distance to anchor (ElementHandle, not Locator)
-            anchor_handle = pay_anchor.element_handle()
-            icon_handle = page.evaluate_handle("""
-                (anchor) => {
-                  const rectA = anchor.getBoundingClientRect();
-                  const icons = Array.from(document.querySelectorAll('svg.MuiSvgIcon-root'));
-                  if (!icons.length) return null;
-                  let best = null, bestD = Infinity;
-                  const ax = rectA.left + rectA.width/2, ay = rectA.top + rectA.height/2;
-                  for (const s of icons) {
-                    const r = s.getBoundingClientRect();
-                    const cx = r.left + r.width/2, cy = r.top + r.height/2;
-                    const d = Math.hypot(cx-ax, cy-ay);
-                    // prefer icons visually on the same horizontal band near the anchor text
-                    const bandPenalty = Math.abs((r.top + r.bottom)/2 - ay) * 0.2;
-                    const score = d + bandPenalty;
-                    if (score < bestD) { bestD = score; best = s; }
-                  }
-                  return best;
+            # 3) Choose nearest info icon within the same container.
+            trigger = page.evaluate_handle("""
+              (box, anchor) => {
+                function center(r){ return {x:r.left + r.width/2, y:r.top + r.height/2}; }
+                const a = center(anchor.getBoundingClientRect());
+                const icons = Array.from(box.querySelectorAll('svg.MuiSvgIcon-root'));
+                let best=null, score=1e9;
+                for (const s of icons){
+                  const r = s.getBoundingClientRect();
+                  if (!r.width || !r.height) continue;
+                  const c = center(r);
+                  const d = Math.hypot(c.x-a.x, c.y-a.y);
+                  const band = Math.abs(c.y-a.y) * 0.25; // bias toward same horizontal band
+                  const sc = d + band;
+                  if (sc < score){ score=sc; best=s; }
                 }
-            """, anchor_handle)
+                return best || anchor;
+              }
+            """, container, anchor)
 
-            trigger_handle = icon_handle or anchor_handle  # fallback to text
-
-            # Open tooltip: hover → synthetic events → focus
+            # 4) Open tooltip (hover → synthetic events → focus) and wait for it.
             try:
-                trigger_handle.hover(force=True, timeout=10_000)
+                trigger.hover(force=True, timeout=10_000)
             except Exception:
                 pass
-
             page.wait_for_timeout(120)
             try:
                 page.evaluate("""(el) => {
                   for (const type of ['pointerover','mouseover','mouseenter','pointermove']) {
                     el.dispatchEvent(new MouseEvent(type, {bubbles:true,cancelable:true,view:window}));
                   }
-                }""", trigger_handle)
+                }""", trigger)
             except Exception:
                 pass
-
             try:
-                trigger_handle.focus()
+                trigger.focus()
             except Exception:
                 pass
 
-            page.wait_for_selector("[role='tooltip'].MuiTooltip-popper, .MuiTooltip-popper", state="visible", timeout=4_000)
+            page.wait_for_selector("[role='tooltip'].MuiTooltip-popper, .MuiTooltip-popper", state="visible", timeout=6_000)
             print("payment tooltip appeared")
             page.wait_for_timeout(350)
             page.screenshot(path=pay_png, full_page=True)
