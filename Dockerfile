@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install system dependencies for Playwright
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -24,16 +24,25 @@ RUN apt-get update && apt-get install -y \
     libxkbcommon0 \
     libxrandr2 \
     xdg-utils \
+    libu2f-udev \
+    libvulkan1 \
+    xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Set Playwright browser path to persist in the container
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
 
 # Copy requirements and install Python packages
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers
-RUN playwright install chromium
+# Install Playwright browsers (Chromium only to save space)
+RUN playwright install --with-deps chromium
+
+# Verify installation
+RUN playwright install-deps chromium
 
 # Create data directory for database and captures
 RUN mkdir -p /app/data
@@ -47,5 +56,8 @@ RUN chmod +x start.sh
 # Expose port
 EXPOSE 8080
 
-# Run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "120", "--workers", "2", "server:app"]
+# Use start script as entrypoint
+ENTRYPOINT ["./start.sh"]
+
+# Run the application with increased timeout for captures
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "180", "--workers", "1", "--worker-class", "sync", "server:app"]
