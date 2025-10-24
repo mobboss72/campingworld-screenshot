@@ -127,7 +127,7 @@
       font-size: 24px;
       font-weight: 400;
       color: var(--text-secondary);
-      margin-bottom: 48px; /* Reduced margin since button is removed */
+      margin-bottom: 48px; 
       max-width: 640px;
       margin-left: auto;
       margin-right: auto;
@@ -538,13 +538,15 @@
     const loading = document.getElementById('loading');
 
     form.addEventListener('submit', function(e) {
+      // Prevent default submit initially to apply UI changes
       e.preventDefault(); 
       
       submitBtn.disabled = true;
       submitBtn.textContent = 'Running Capture...';
       loading.classList.add('active');
 
-      // Use a brief timeout before submitting to allow the UI update to render
+      // Crucial Fix: Re-submit the form after the UI has updated. 
+      // The form will use its specified method="POST" and action="/capture".
       setTimeout(() => {
           form.submit();
       }, 10);
