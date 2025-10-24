@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 PORT = int(os.getenv("PORT", "8080"))
 OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
-APP_VERSION = "2025-10-24T00:45Z  dual-tooltips + resilient-payment"
+APP_VERSION = "2025-10-24T01:20Z  dual-tooltips + payment-proximity"
 
 # ---------------- App ----------------
 app = Flask(__name__, static_folder=None)
@@ -63,7 +63,7 @@ def capture():
             price_exists=price_ok, payment_exists=pay_ok,
             price_id=price_id, payment_id=pay_id,
             sha_price=sha_price, sha_payment=sha_pay,
-            log_text="\n".join(log[-200:]), version=APP_VERSION
+            log_text="\n".join(log[-250:]), version=APP_VERSION
         )
         return Response(html, mimetype="text/html")
     except Exception as e:
@@ -89,10 +89,8 @@ def get_https_date() -> str | None:
         return None
 
 def _fsize(path):
-    try:
-        return f"{os.path.getsize(path)} bytes"
-    except Exception:
-        return "n/a"
+    try: return f"{os.path.getsize(path)} bytes"
+    except Exception: return "n/a"
 
 # ---------------- Core Capture ----------------
 def do_capture(stock: str):
@@ -156,7 +154,7 @@ def do_capture(stock: str):
         except Exception as e:
             log.append(f"overlay CSS error: {e}")
 
-        # ----- PRICE (kept as your known-good path) -----
+        # ----- PRICE (known-good) -----
         try:
             capture_price(page, price_png, log)
         except Exception as e:
@@ -169,7 +167,7 @@ def do_capture(stock: str):
         except Exception:
             pass
 
-        # ----- PAYMENT (now resilient even without an icon) -----
+        # ----- PAYMENT (proximity hunt) -----
         try:
             capture_payment(page, pay_png, log)
         except Exception as e:
@@ -196,12 +194,11 @@ def capture_price(page, out_path, log):
         log.append("price: no elements")
         return
 
-    # Prefer the one showing a dollars string
+    # Pick the one that looks like a dollar amount (prefer the last match)
     idx = 0
     for i in range(count):
         t = (elems.nth(i).text_content() or "").strip()
-        if "$" in t:
-            idx = i
+        if "$" in t: idx = i
     target = elems.nth(idx)
     ttxt = (target.text_content() or "").strip()
     log.append(f"price use idx={idx} text='{ttxt}'")
@@ -219,17 +216,17 @@ def capture_price(page, out_path, log):
         log.append("price: icon not found, using text node")
 
     _show_tooltip(page, trigger, log, label="price")
-
-    # Wait for actual tooltip/popover and shoot
     _wait_tooltip_visible(page, log, label="price")
     page.wait_for_timeout(300)
     page.screenshot(path=out_path, full_page=True)
     log.append(f"price screenshot saved {out_path} size={_fsize(out_path)}")
 
-# ---------------- Payment Hover (robust) ----------------
+# ---------------- Payment Hover (proximity + fallbacks) ----------------
 def capture_payment(page, out_path, log):
-    # Find the monthly payment anchor text (e.g., "Payment", "/mo", "monthly")
-    anchor_xpath = "xpath=//*[contains(normalize-space(.), '/mo') or contains(translate(normalize-space(.),'PAYMENT','payment'),'payment') or contains(translate(normalize-space(.),'MONTH','month'),'month')]"
+    # 1) Find a visible payment anchor line
+    anchor_xpath = ("xpath=//*[contains(normalize-space(.), '/mo') "
+                    "or contains(translate(normalize-space(.),'PAYMENT','payment'),'payment') "
+                    "or contains(translate(normalize-space(.),'MONTH','month'),'month')]")
     anchor = page.locator(anchor_xpath)
     log.append("payment anchor via " + anchor_xpath)
 
@@ -237,53 +234,131 @@ def capture_payment(page, out_path, log):
         log.append("payment: no text anchor found")
         return
 
-    # Use the closest visible one
-    _a = None
+    vis = None
     for i in range(anchor.count()):
         cand = anchor.nth(i)
         if cand.is_visible():
-            _a = cand
+            vis = cand
             break
-    if _a is None:
+    if vis is None:
         log.append("payment: all anchors invisible")
         return
 
-    # Narrow to a compact label line (avoid large blocks)
-    # If it's a big container, try its first inline child
-    _a.scroll_into_view_if_needed()
+    vis.scroll_into_view_if_needed()
     log.append("payment anchor scrolled into view")
 
-    # Look for an adjacent info icon; if not, fall back to the text
-    icon = _a.locator(
-        "xpath=following::*[contains(@class,'MuiSvgIcon-root') or contains(@data-testid,'Info') or @aria-label][1]"
-    )
-    if icon.count() > 0 and icon.first.is_visible():
-        trigger = icon.first
-        log.append("payment: using adjacent info icon")
-    else:
-        trigger = _a
-        log.append("payment: no icon trigger found; using text as trigger")
+    # 2) Try to find a nearby trigger with aria-describedby (MUI tooltips mark the trigger)
+    #    We search within the closest stacked container to keep it local.
+    try:
+        page.eval_on_selector(
+            "body",
+            """(_,)=>
+            { /* no-op to ensure eval context ok */ }"""
+        )
+    except Exception:
+        pass
 
-    # Try to show the tooltip with multiple strategies
+    # Mark a nearby trigger (if any) with a temp data-attr we can locate from Python.
+    data_key = f"data-paytrigger-{int(datetime.datetime.utcnow().timestamp())}"
+    found = page.evaluate(
+        """(anchorSel, dataKey) => {
+            const anchor = document.evaluate(anchorSel, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+            if (!anchor) return false;
+
+            // Find a local container row
+            let row = anchor.closest('[class*="MuiStack"], [class*="MuiBox"], [class*="MuiGrid"], [class*="MuiTypography"]') || anchor.parentElement;
+            if (!row) row = anchor.parentElement || document.body;
+
+            // candidates: elements with aria-describedby (mui tooltip), or small svg/info-like controls
+            const cands = Array.from(row.querySelectorAll('[aria-describedby], [title], [aria-label], svg, button, span, i'));
+            const ar = anchor.getBoundingClientRect();
+            let best = null, bestScore = 1e9;
+
+            for (const el of cands) {
+              if (!(el instanceof HTMLElement)) continue;
+              const r = el.getBoundingClientRect();
+              if (!r.width || !r.height) continue;
+
+              // skip huge blocks; prefer small inline-ish elements
+              const area = r.width * r.height;
+              if (area > 50000) continue;
+
+              // distance favoring same line and near the right side of label
+              const cx = r.left + r.width/2, cy = r.top + r.height/2;
+              const ax = ar.left + ar.width*0.8, ay = ar.top + ar.height/2;
+              const dx = cx - ax, dy = cy - ay;
+              const dist = Math.hypot(dx, dy);
+
+              // boost if aria-describedby present or looks like info
+              const hasAD = el.hasAttribute('aria-describedby');
+              const looksInfo = /info|i|ⓘ|!/.test((el.getAttribute('aria-label')||'')+(el.getAttribute('title')||'')+(el.className||''));
+              let score = dist + (hasAD ? -40 : 0) + (looksInfo ? -20 : 0) + (area/400.0);
+
+              // within about same row
+              if (Math.abs(dy) > 60) score += 200;
+
+              if (!best || score < bestScore) { best = el; bestScore = score; }
+            }
+
+            if (best) {
+              best.setAttribute(dataKey, "1");
+              return true;
+            }
+            return false;
+        }""",
+        anchor_xpath, data_key
+    )
+
+    trigger = None
+    if found:
+        trigger = page.locator(f'[{data_key}="1"]').first
+        if trigger.count() > 0 and trigger.first.is_visible():
+            log.append("payment: using proximity trigger (aria-describedby/info-nearby)")
+    else:
+        # 3) No proximity trigger: try an obvious adjacent icon after the anchor
+        icon = vis.locator(
+            "xpath=following::*[contains(@class,'MuiSvgIcon-root') or contains(@data-testid,'Info') or @aria-label][1]"
+        )
+        if icon.count() > 0 and icon.first.is_visible():
+            trigger = icon.first
+            log.append("payment: using adjacent info icon")
+        else:
+            # 4) Last fallback: use the anchor text itself
+            trigger = vis
+            log.append("payment: fallback to text as trigger")
+
+    # 5) Try to show tooltip (hover → focus → sweep → click)
     _show_tooltip(page, trigger, log, label="payment")
 
-    # Wait for the tooltip and capture if it appears
+    # 6) Wait & capture if something appeared
     if _wait_tooltip_visible(page, log, label="payment", soft=True):
         page.wait_for_timeout(300)
         page.screenshot(path=out_path, full_page=True)
         log.append(f"payment screenshot saved {out_path} size={_fsize(out_path)}")
-    else:
-        log.append("payment: tooltip never appeared")
+        return
+
+    # 7) As a last diagnostic nudge: sweep a tight hitbox around the row
+    try:
+        box = vis.bounding_box()
+        if box:
+            y = box["y"] + box["height"] * 0.5
+            for xfac in [0.1, 0.25, 0.4, 0.55, 0.7, 0.85, 0.95]:
+                page.mouse.move(box["x"] + box["width"]*xfac, y)
+                page.wait_for_timeout(120)
+                if _wait_tooltip_visible(page, log, label="payment", soft=True):
+                    page.wait_for_timeout(200)
+                    page.screenshot(path=out_path, full_page=True)
+                    log.append(f"payment screenshot saved (sweep) {out_path} size={_fsize(out_path)}")
+                    return
+    except Exception:
+        pass
+
+    log.append("payment: tooltip never appeared")
 
 # ---------------- Tooltip helpers ----------------
-def _wait_tooltip_visible(page, log, label=""):
-    # Hard wait, throw on timeout
-    sel = "[role='tooltip'], .MuiTooltip-popper, [data-popper-placement]"
-    page.wait_for_selector(sel, state="visible", timeout=5000)
-    log.append(f"{label} tooltip appeared")
-
 def _wait_tooltip_visible(page, log, label="", soft=False):
-    sel = "[role='tooltip'], .MuiTooltip-popper, [data-popper-placement]"
+    # include typical MUI tooltip/popover mounts
+    sel = "[role='tooltip'], .MuiTooltip-popper, [data-popper-placement], .MuiPopover-root .MuiPaper-root"
     try:
         page.wait_for_selector(sel, state="visible", timeout=5000)
         log.append(f"{label} tooltip appeared")
@@ -303,7 +378,7 @@ def _show_tooltip(page, trigger, log, label=""):
     except Exception:
         pass
 
-    # 2) Focus (MUI tooltip opens on focus by default)
+    # 2) Focus
     try:
         trigger.focus()
         page.wait_for_timeout(200)
@@ -317,19 +392,19 @@ def _show_tooltip(page, trigger, log, label=""):
         box = trigger.bounding_box()
         if box:
             steps = [
-                (box["x"] + box["width"] * 0.1, box["y"] + box["height"] * 0.5),
-                (box["x"] + box["width"] * 0.5, box["y"] + box["height"] * 0.5),
-                (box["x"] + box["width"] * 0.9, box["y"] + box["height"] * 0.5),
+                (box["x"] + box["width"] * 0.15, box["y"] + box["height"] * 0.5),
+                (box["x"] + box["width"] * 0.5,  box["y"] + box["height"] * 0.5),
+                (box["x"] + box["width"] * 0.85, box["y"] + box["height"] * 0.5),
             ]
             for (mx, my) in steps:
                 page.mouse.move(mx, my)
-                page.wait_for_timeout(200)
+                page.wait_for_timeout(180)
                 if _wait_tooltip_visible(page, log, label=label, soft=True):
                     return
     except Exception:
         pass
 
-    # 4) Click as last resort (some tooltips open on click)
+    # 4) Click as last resort
     try:
         trigger.click(timeout=3000, force=True)
         page.wait_for_timeout(250)
