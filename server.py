@@ -24,13 +24,13 @@ STORAGE_MODE = os.getenv("STORAGE_MODE", "ephemeral")  # "ephemeral" or "persist
 PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", "/app/data/captures")
 AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "7"))
 
-# Oregon Camping World locations (alphabetical)
+# Oregon Camping World locations (alphabetical) with coordinates
 CW_LOCATIONS = {
-    "bend": {"name": "Bend", "zip": "97701"},
-    "eugene": {"name": "Eugene", "zip": "97402"},
-    "hillsboro": {"name": "Hillsboro", "zip": "97124"},
-    "medford": {"name": "Medford", "zip": "97504"},
-    "portland": {"name": "Portland", "zip": "97201"},
+    "bend": {"name": "Bend", "zip": "97701", "lat": 44.0582, "lon": -121.3153},
+    "eugene": {"name": "Eugene", "zip": "97402", "lat": 44.0521, "lon": -123.0868},
+    "hillsboro": {"name": "Hillsboro", "zip": "97124", "lat": 45.5229, "lon": -122.9898},
+    "medford": {"name": "Medford", "zip": "97504", "lat": 42.3265, "lon": -122.8756},
+    "portland": {"name": "Portland", "zip": "97201", "lat": 45.5152, "lon": -122.6784},
 }
 
 # RFC 3161 Timestamp Authority URLs
@@ -342,8 +342,10 @@ def capture():
         loc_info = CW_LOCATIONS[location]
         zip_code = loc_info["zip"]
         location_name = loc_info["name"]
+        latitude = loc_info["lat"]
+        longitude = loc_info["lon"]
 
-        price_path, pay_path, url, debug_info = do_capture(stock, zip_code)
+        price_path, pay_path, url, debug_info = do_capture(stock, zip_code, location_name, latitude, longitude)
 
         utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         hdate = https_date()
@@ -492,7 +494,7 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         # Metadata table
         meta_data = [
             ['Stock Number:', stock],
-            ['Selected Location:', f"{location} (ZIP: {zip_code})"],
+            ['Location:', f"{location} (ZIP: {zip_code})"],
             ['URL:', url],
             ['Capture Time (UTC):', utc_time],
             ['HTTPS Date:', https_date or 'N/A'],
@@ -509,22 +511,6 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
         story.append(meta_table)
-        story.append(Spacer(1, 0.1*inch))
-        
-        # Add note about location
-        note_style = ParagraphStyle(
-            'Note',
-            parent=styles['Normal'],
-            fontSize=9,
-            textColor=colors.HexColor('#666666'),
-            leftIndent=0,
-            rightIndent=0,
-        )
-        story.append(Paragraph(
-            f"<i>Note: ZIP code {zip_code} was injected for finance calculations. "
-            f"The location name displayed in screenshots reflects the website's own detection.</i>",
-            note_style
-        ))
         story.append(Spacer(1, 0.2*inch))
         
         # RFC 3161 Timestamps
@@ -708,55 +694,123 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
     debug.append(f"Attempting to trigger {tooltip_name} tooltip for label: '{label_text}'")
     
     try:
+        # Wait a bit for page to stabilize
+        page.wait_for_timeout(1500)
+        
+        # Try to find all instances of the label
         all_labels = page.locator(f"text={label_text}").all()
         debug.append(f"Found {len(all_labels)} instances of '{label_text}'")
         
+        if len(all_labels) == 0:
+            debug.append(f"❌ No instances found - element may not exist on page")
+            return False, "\n".join(debug)
+        
+        # Try each visible instance
         success = False
         for idx, label in enumerate(all_labels):
             try:
-                if not label.is_visible(timeout=1000):
+                # Check if this instance is visible
+                is_visible = label.is_visible(timeout=1000)
+                if not is_visible:
                     debug.append(f"  Instance {idx}: not visible, skipping")
                     continue
                 
                 debug.append(f"  Instance {idx}: visible, attempting trigger")
                 
+                # Scroll to this label
                 label.scroll_into_view_if_needed(timeout=3000)
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(800)
                 
+                # Try multiple strategies to find the info icon
                 icon_found = False
                 
+                # Strategy 1: Parent element contains SVG
                 try:
                     parent = label.locator("xpath=..").first
-                    svg_icon = parent.locator("svg.MuiSvgIcon-root").first
+                    svg_icons = parent.locator("svg.MuiSvgIcon-root").all()
                     
-                    if svg_icon.count() > 0 and svg_icon.is_visible(timeout=1000):
-                        debug.append(f"    Found SVG icon, clicking...")
-                        svg_icon.click(timeout=3000, force=True)
-                        icon_found = True
-                        debug.append(f"    ✓ Clicked icon")
+                    debug.append(f"    Found {len(svg_icons)} SVG icons in parent")
+                    
+                    for svg_idx, svg_icon in enumerate(svg_icons):
+                        try:
+                            if svg_icon.is_visible(timeout=500):
+                                debug.append(f"    Attempting to click SVG icon {svg_idx}...")
+                                
+                                # Try regular click first
+                                svg_icon.click(timeout=2000, force=True)
+                                page.wait_for_timeout(1000)
+                                
+                                icon_found = True
+                                debug.append(f"    ✓ Clicked SVG icon {svg_idx}")
+                                break
+                        except Exception as e:
+                            debug.append(f"    SVG {svg_idx} click failed: {str(e)[:100]}")
+                            continue
+                            
                 except Exception as e:
-                    debug.append(f"    SVG icon search failed: {e}")
+                    debug.append(f"    Parent SVG search failed: {str(e)[:100]}")
                 
+                # Strategy 2: Look for info icon with specific attributes
                 if not icon_found:
-                    debug.append(f"    No icon found, hovering label...")
-                    label.hover(timeout=3000, force=True)
-                    debug.append(f"    ✓ Hovered label")
+                    try:
+                        debug.append(f"    Trying data-testid selectors...")
+                        info_selectors = [
+                            '[data-testid*="info"]',
+                            '[data-testid*="Info"]',
+                            'svg[data-testid]',
+                        ]
+                        
+                        for selector in info_selectors:
+                            nearby_icons = page.locator(selector).all()
+                            if len(nearby_icons) > 0:
+                                debug.append(f"    Found {len(nearby_icons)} with {selector}")
+                                for icon in nearby_icons:
+                                    try:
+                                        if icon.is_visible(timeout=500):
+                                            icon.click(timeout=2000, force=True)
+                                            page.wait_for_timeout(1000)
+                                            icon_found = True
+                                            debug.append(f"    ✓ Clicked icon via {selector}")
+                                            break
+                                    except:
+                                        continue
+                            if icon_found:
+                                break
+                    except Exception as e:
+                        debug.append(f"    data-testid search failed: {str(e)[:100]}")
                 
-                page.wait_for_timeout(1000)
+                # Strategy 3: Hover the label itself as last resort
+                if not icon_found:
+                    debug.append(f"    No icon found, hovering label as fallback...")
+                    try:
+                        label.hover(timeout=2000, force=True)
+                        page.wait_for_timeout(1200)
+                        debug.append(f"    ✓ Hovered label")
+                    except Exception as e:
+                        debug.append(f"    Hover failed: {str(e)[:100]}")
+                
+                # Wait for tooltip to appear with multiple selectors
+                page.wait_for_timeout(1500)
                 
                 tooltip_selectors = [
-                    "[role='tooltip']:visible",
-                    ".MuiTooltip-popper:visible",
-                    ".MuiTooltip-tooltip:visible",
+                    "[role='tooltip']",
+                    ".MuiTooltip-popper",
+                    ".MuiTooltip-tooltip",
+                    ".MuiPopper-root",
                 ]
                 
+                tooltip_found = False
                 for selector in tooltip_selectors:
                     try:
-                        tooltip = page.locator(selector).first
-                        if tooltip.count() > 0 and tooltip.is_visible(timeout=2000):
-                            debug.append(f"    ✓ Tooltip appeared with: {selector}")
-                            page.wait_for_timeout(800)
-                            success = True
+                        tooltips = page.locator(selector).all()
+                        for tooltip in tooltips:
+                            if tooltip.is_visible(timeout=1000):
+                                debug.append(f"    ✓ Tooltip visible with: {selector}")
+                                page.wait_for_timeout(1000)  # Extra wait for animation
+                                tooltip_found = True
+                                success = True
+                                break
+                        if tooltip_found:
                             break
                     except:
                         continue
@@ -768,35 +822,70 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
                     debug.append(f"    ⚠ No tooltip appeared for instance {idx}")
                     
             except Exception as e:
-                debug.append(f"  Instance {idx} failed: {e}")
+                debug.append(f"  Instance {idx} failed: {str(e)[:150]}")
                 continue
         
+        # Final JavaScript fallback if nothing worked
         if not success:
-            debug.append("⚠ Failed to trigger tooltip from any instance")
-            debug.append("Attempting JavaScript fallback...")
+            debug.append("⚠ All standard methods failed, trying JavaScript injection...")
             try:
-                page.evaluate(f"""
+                result = page.evaluate(f"""
                     () => {{
+                        // Find all elements containing the label text
                         const labels = Array.from(document.querySelectorAll('*'))
                             .filter(el => el.textContent.trim() === '{label_text}');
                         
+                        console.log('JS: Found', labels.length, 'label elements');
+                        
                         for (const label of labels) {{
-                            const svg = label.parentElement?.querySelector('svg');
+                            // Look for SVG in parent or siblings
+                            const parent = label.parentElement;
+                            if (!parent) continue;
+                            
+                            const svg = parent.querySelector('svg');
                             if (svg) {{
-                                svg.dispatchEvent(new MouseEvent('mouseenter', {{bubbles: true}}));
-                                svg.dispatchEvent(new MouseEvent('mouseover', {{bubbles: true}}));
-                                svg.click();
+                                console.log('JS: Found SVG, triggering events');
+                                
+                                // Scroll into view
+                                svg.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+                                
+                                // Wait a bit
+                                setTimeout(() => {{
+                                    // Trigger all possible mouse events
+                                    ['mouseenter', 'mouseover', 'mousemove', 'click'].forEach(eventType => {{
+                                        svg.dispatchEvent(new MouseEvent(eventType, {{
+                                            bubbles: true,
+                                            cancelable: true,
+                                            view: window
+                                        }}));
+                                    }});
+                                }}, 500);
+                                
                                 return true;
                             }}
                         }}
                         return false;
                     }}
                 """)
-                page.wait_for_timeout(1000)
-                debug.append("✓ JavaScript fallback executed")
-                success = True
+                
+                if result:
+                    page.wait_for_timeout(2000)
+                    debug.append("✓ JavaScript fallback executed - events dispatched")
+                    
+                    # Check for tooltip again
+                    for selector in tooltip_selectors:
+                        try:
+                            if page.locator(selector).first.is_visible(timeout=2000):
+                                debug.append(f"✓ Tooltip appeared after JS fallback: {selector}")
+                                success = True
+                                break
+                        except:
+                            continue
+                else:
+                    debug.append("⚠ JavaScript fallback: no SVG elements found")
+                    
             except Exception as e:
-                debug.append(f"JavaScript fallback failed: {e}")
+                debug.append(f"JavaScript fallback error: {str(e)[:150]}")
         
         return success, "\n".join(debug)
         
@@ -805,7 +894,7 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
         traceback.print_exc()
         return False, "\n".join(debug)
 
-def do_capture(stock: str, zip_code: str) -> tuple[str | None, str | None, str, str]:
+def do_capture(stock: str, zip_code: str, location_name: str, latitude: float, longitude: float) -> tuple[str | None, str | None, str, str]:
     url = f"https://rv.campingworld.com/rv/{stock}"
     
     # Choose storage location based on mode
@@ -822,9 +911,10 @@ def do_capture(stock: str, zip_code: str) -> tuple[str | None, str | None, str, 
     all_debug = []
     all_debug.append(f"Starting capture for stock: {stock}")
     all_debug.append(f"URL: {url}")
-    all_debug.append(f"ZIP Code: {zip_code}")
+    all_debug.append(f"Location: {location_name} (ZIP: {zip_code})")
+    all_debug.append(f"Coordinates: {latitude}, {longitude}")
 
-    print(f"🚀 Starting capture: {url} (ZIP: {zip_code})")
+    print(f"🚀 Starting capture: {url} (ZIP: {zip_code}, Location: {location_name})")
     
     try:
         with sync_playwright() as p:
@@ -843,7 +933,11 @@ def do_capture(stock: str, zip_code: str) -> tuple[str | None, str | None, str, 
                 user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
                 locale="en-US",
+                geolocation={"latitude": latitude, "longitude": longitude},
+                permissions=["geolocation"]
             )
+            
+            all_debug.append(f"✓ Browser context created with geolocation: {latitude}, {longitude}")
             
             page = context.new_page()
             
