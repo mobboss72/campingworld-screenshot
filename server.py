@@ -1,5 +1,5 @@
 # server.py
-import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io, re # <-- 1. IMPORTED RE
+import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io, re # <-- RE is already imported
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from rfc3161ng import RemoteTimestamper, get_hash_oid
@@ -314,11 +314,9 @@ def admin_storage():
 
 # -------------------- Routes --------------------
 
-# --- THIS DUPLICATE ROUTE WAS REMOVED ---
-# @app.get("/")
-# def root():
-#    return send_from_directory(".", "index.html")
-# --- END REMOVAL ---
+@app.get("/")
+def root():
+    return send_from_directory(".", "index.html")
 
 @app.get("/admin")
 @require_admin_auth
@@ -605,12 +603,6 @@ def admin_dashboard():
     except Exception as e:
         return Response(f"Error loading dashboard: {e}", status=500)
 
-# -------------------- Routes --------------------
-
-@app.get("/")
-def root():
-    return send_from_directory(".", "index.html")
-
 @app.get("/screenshot/<sid>")
 def serve_shot(sid):
     path = screenshot_cache.get(sid)
@@ -808,7 +800,7 @@ def view_capture(capture_id):
                 stock=capture['stock'],
                 location=capture['location'],
                 zip_code=capture['zip_code'],
-                url=capture['url'],
+                url=capture['url'], # This is fine, it will be the captured URL
                 utc_time=capture['capture_utc'],
                 https_date=capture['https_date'],
                 price_path=price_path if os.path.exists(price_path or "") else None,
@@ -835,11 +827,8 @@ def capture():
         stock = (request.form.get("stock") or "").strip()
         location = (request.form.get("location") or "portland").strip().lower()
         
-        # --- 2. MODIFIED VALIDATION ---
-        # Was: if not stock.isdigit():
         if not re.match(r"^[a-zA-Z0-9]+$", stock):
             return Response("Invalid stock number. Please use letters and numbers only.", status=400)
-        # --- END MODIFICATION ---
         
         if location not in CW_LOCATIONS:
             return Response("Invalid location", status=400)
@@ -850,7 +839,9 @@ def capture():
         latitude = loc_info["lat"]
         longitude = loc_info["lon"]
 
-        price_path, pay_path, url, debug_info = do_capture(stock, zip_code, location_name, latitude, longitude)
+        # --- MODIFIED: Capture final_url ---
+        price_path, pay_path, final_url, debug_info = do_capture(stock, zip_code, location_name, latitude, longitude)
+        # --- END MODIFICATION ---
 
         utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         hdate = https_date()
@@ -880,7 +871,7 @@ def capture():
                     stock=stock,
                     location=location_name,
                     zip_code=zip_code,
-                    url=url,
+                    url=final_url, # --- MODIFIED: Pass final_url to PDF ---
                     utc_time=utc_now,
                     https_date=hdate,
                     price_path=price_path if price_ok else None,
@@ -907,7 +898,7 @@ def capture():
                         pdf_path, debug_info
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    stock, location_name, zip_code, url, utc_now, hdate,
+                    stock, location_name, zip_code, final_url, utc_now, hdate, # --- MODIFIED: Save final_url to DB ---
                     sha_price, sha_pay, price_path, pay_path,
                     rfc_price['tsa'] if rfc_price else None,
                     rfc_price['timestamp'] if rfc_price else None,
@@ -966,6 +957,8 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         elif pay_path:
             tmpdir = os.path.dirname(pay_path)
         else:
+            # This case handles if a "Not Found" capture failed to get a screenshot
+            # or if some other unknown error occurred.
             tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
         
         pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
@@ -987,7 +980,6 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             alignment=TA_CENTER
         )
         
-        # --- 3. ADDED STYLE FOR "NOT FOUND" CALLOUT ---
         not_found_style = ParagraphStyle(
             'NotFound',
             parent=styles['Normal'],
@@ -1002,7 +994,6 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             alignment=TA_CENTER,
             leading=14
         )
-        # --- END ADDED STYLE ---
         
         story.append(Paragraph("Camping World Compliance Capture Report", title_style))
         story.append(Spacer(1, 0.2*inch))
@@ -1010,7 +1001,7 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         meta_data = [
             ['Stock Number:', stock],
             ['Location:', f"{location} (ZIP: {zip_code})"],
-            ['URL:', url],
+            ['URL:', url], # This now reflects the *final* captured URL
             ['Capture Time (UTC):', utc_time],
             ['HTTPS Date:', https_date or 'N/A'],
         ]
@@ -1028,7 +1019,6 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         story.append(meta_table)
         story.append(Spacer(1, 0.2*inch))
         
-        # --- 3. ADDED LOGIC TO CHECK FOR "NOT FOUND" FLAG ---
         is_not_found = "NOT_FOUND_CAPTURE=TRUE" in (debug_info or "")
         
         if is_not_found:
@@ -1038,13 +1028,14 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
                 "This report serves as a record that no online pricing was available to a customer.",
                 not_found_style
             ))
-        # --- END ADDED LOGIC ---
         
         if rfc_price or rfc_pay:
             story.append(Paragraph("Cryptographic Timestamps (RFC 3161)", styles['Heading2']))
             ts_data = []
             if rfc_price:
-                ts_data.append(['Price Disclosure:', f"{rfc_price['timestamp']} | TSA: {rfc_price['tsa']}"])
+                # --- MODIFIED: Change label if it's a "Not Found" screenshot ---
+                label = "'Not Found' Screenshot:" if is_not_found else "Price Disclosure:"
+                ts_data.append([label, f"{rfc_price['timestamp']} | TSA: {rfc_price['tsa']}"])
             if rfc_pay:
                 ts_data.append(['Payment Disclosure:', f"{rfc_pay['timestamp']} | TSA: {rfc_pay['tsa']}"])
             
@@ -1065,12 +1056,10 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         # Price Disclosure (Top)
         if price_path and os.path.exists(price_path):
             try:
-                # --- 3. MODIFIED LOGIC FOR "NOT FOUND" LABEL ---
                 if is_not_found:
                     story.append(Paragraph("<b>'Not Found' Page Screenshot</b>", styles['Normal']))
                 else:
                     story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
-                # --- END MODIFICATION ---
                 
                 story.append(Spacer(1, 0.05*inch))
                 
@@ -1099,13 +1088,11 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
                 story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
                 story.append(Spacer(1, 0.15*inch))
         
-        # --- 3. MODIFIED LOGIC TO HIDE "PAYMENT NOT AVAILABLE" ON "NOT FOUND" PAGES ---
         elif not is_not_found: # Only show this if it's NOT a "not found" capture
             story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
             story.append(Spacer(1, 0.05*inch))
             story.append(Paragraph("Price disclosure not available", styles['Normal']))
             story.append(Spacer(1, 0.15*inch))
-        # --- END MODIFICATION ---
         
         # Payment Disclosure (Bottom)
         if pay_path and os.path.exists(pay_path):
@@ -1135,24 +1122,22 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
                 story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
                 story.append(Spacer(1, 0.15*inch))
         
-        # --- 3. MODIFIED LOGIC TO HIDE "PAYMENT NOT AVAILABLE" ON "NOT FOUND" PAGES ---
         elif not is_not_found: # Only show this if it's NOT a "not found" capture
             story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
             story.append(Spacer(1, 0.05*inch))
             story.append(Paragraph("Payment disclosure not available", styles['Normal']))
             story.append(Spacer(1, 0.15*inch))
-        # --- END MODIFICATION ---
         
         story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
         
-        # --- 3. MODIFIED LOGIC FOR HASH LABELS ---
         hash_data = []
         if is_not_found:
-            hash_data.append(['Not Found Screenshot:', sha_price])
+            hash_data.append(["'Not Found' Screenshot:", sha_price])
         else:
-            hash_data.append(['Price Disclosure:', sha_price])
-            hash_data.append(['Payment Disclosure:', sha_pay])
-        # --- END MODIFICATION ---
+            if sha_price != "N/A":
+                hash_data.append(['Price Disclosure:', sha_price])
+            if sha_pay != "N/A":
+                hash_data.append(['Payment Disclosure:', sha_pay])
         
         hash_table = Table(hash_data, colWidths=[2*inch, 5*inch])
         hash_table.setStyle(TableStyle([
@@ -1416,7 +1401,8 @@ def find_and_trigger_tooltip(page, label_text, tooltip_name):
         return False, "\n".join(debug)
 
 def do_capture(stock, zip_code, location_name, latitude, longitude):
-    url = f"https://rv.campingworld.com/rv/{stock}"
+    # --- MODIFIED: Store requested URL ---
+    requested_url = f"https://rv.campingworld.com/rv/{stock}"
     
     if STORAGE_MODE == "persistent" and PERSISTENT_STORAGE_PATH:
         os.makedirs(PERSISTENT_STORAGE_PATH, exist_ok=True)
@@ -1430,11 +1416,18 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
     
     all_debug = []
     all_debug.append(f"Starting capture for stock: {stock}")
-    all_debug.append(f"URL: {url}")
+    all_debug.append(f"Requested URL: {requested_url}")
     all_debug.append(f"Location: {location_name} (ZIP: {zip_code})")
     all_debug.append(f"Coordinates: {latitude}, {longitude}")
 
-    print(f"🚀 Starting capture: {url} (ZIP: {zip_code}, Location: {location_name})")
+    # --- MODIFIED: Identify if unit is used (contains letters) ---
+    is_used = bool(re.search(r"[a-zA-Z]", stock))
+    all_debug.append(f"Unit type: {'Used' if is_used else 'New'}")
+    # --- END MODIFICATION ---
+
+    print(f"🚀 Starting capture: {requested_url} (ZIP: {zip_code}, Location: {location_name})")
+    
+    final_url = requested_url # Default in case of error
     
     try:
         with sync_playwright() as p:
@@ -1462,7 +1455,7 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
             page = context.new_page()
             
             all_debug.append("Navigating to page...")
-            page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            page.goto(requested_url, wait_until="domcontentloaded", timeout=60_000)
             
             try:
                 page.wait_for_load_state("networkidle", timeout=30_000)
@@ -1481,6 +1474,11 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
                 all_debug.append("✓ Reloaded page with ZIP")
             except Exception as e:
                 all_debug.append(f"⚠ ZIP injection issue: {e}")
+
+            # --- MODIFIED: Get final URL after all navigation/reloads ---
+            final_url = page.url
+            all_debug.append(f"✓ Final URL captured: {final_url}")
+            # --- END MODIFICATION ---
             
             page.add_style_tag(content="""
                 [id*="intercom"], [class*="livechat"], [class*="chat"],
@@ -1507,22 +1505,30 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
                 all_debug.append("✓ Scrolled to pricing section")
             except Exception as e:
                 all_debug.append(f"⚠ Scroll failed: {e}")
-            
-            all_debug.append("\n--- Capturing Price Tooltip ---")
-            success, debug_info = find_and_trigger_tooltip(page, "Total Price", "price")
-            all_debug.append(debug_info)
-            
-            if success:
-                try:
-                    page.screenshot(path=price_png, full_page=True)
-                    size = os.path.getsize(price_png)
-                    all_debug.append(f"✓ Price screenshot saved: {size} bytes")
-                    print(f"✓ Price screenshot: {size} bytes")
-                except Exception as e:
-                    all_debug.append(f"❌ Price screenshot failed: {e}")
-                    price_png = None
+
+            # --- MODIFIED: Initialize paths as None ---
+            price_png_path = None
+            pay_png_path = None
+            # --- END MODIFICATION ---
+
+            # --- MODIFIED: Only run "Total Price" capture for NEW units ---
+            if not is_used:
+                all_debug.append("\n--- Capturing Price Tooltip (New Unit) ---")
+                success, debug_info = find_and_trigger_tooltip(page, "Total Price", "price")
+                all_debug.append(debug_info)
+                
+                if success:
+                    try:
+                        page.screenshot(path=price_png, full_page=True)
+                        size = os.path.getsize(price_png)
+                        all_debug.append(f"✓ Price screenshot saved: {size} bytes")
+                        print(f"✓ Price screenshot: {size} bytes")
+                        price_png_path = price_png # Set path on success
+                    except Exception as e:
+                        all_debug.append(f"❌ Price screenshot failed: {e}")
             else:
-                price_png = None
+                all_debug.append("\n--- Skipping Price Tooltip (Used Unit) ---")
+            # --- END MODIFICATION ---
             
             page.wait_for_timeout(1000)
             
@@ -1536,18 +1542,20 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
                     size = os.path.getsize(pay_png)
                     all_debug.append(f"✓ Payment screenshot saved: {size} bytes")
                     print(f"✓ Payment screenshot: {size} bytes")
+                    pay_png_path = pay_png # Set path on success
                 except Exception as e:
                     all_debug.append(f"❌ Payment screenshot failed: {e}")
-                    pay_png = None
-            else:
-                pay_png = None
 
-            # --- 4. ADDED "NOT FOUND" LOGIC ---
+            # --- MODIFIED: Updated "Not Found" Logic ---
             not_found = False
-            if price_png is None and pay_png is None:
-                all_debug.append("\n--- Checking for 'No Matches Found' ---")
+            # Check for failure:
+            # 1. If it's USED and payment capture FAILED
+            # 2. If it's NEW and BOTH price and payment captures FAILED
+            if (is_used and pay_png_path is None) or \
+               (not is_used and price_png_path is None and pay_png_path is None):
+                
+                all_debug.append("\n--- Checking for 'No Matches Found' (Capture Failed) ---")
                 try:
-                    # Check for common "not found" text patterns
                     not_found_locator = page.locator(
                         "h1:text-matches('Page Not Found', 'i'), "
                         "h2:text-matches('No Matches Found', 'i'), "
@@ -1560,11 +1568,12 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
                         all_debug.append(f"✓ Found 'Not Found' text: {not_found_text.strip()}")
                         
                         # Re-purpose price_png for the "not found" screenshot
-                        price_png = os.path.join(tmpdir, f"cw_{stock}_not_found.png")
-                        page.screenshot(path=price_png, full_page=True)
-                        size = os.path.getsize(price_png)
+                        not_found_png = os.path.join(tmpdir, f"cw_{stock}_not_found.png")
+                        page.screenshot(path=not_found_png, full_page=True)
+                        size = os.path.getsize(not_found_png)
                         
                         all_debug.append(f"✓ 'Not Found' screenshot saved: {size} bytes")
+                        price_png_path = not_found_png # Set price_png_path to the not_found screenshot
                         not_found = True # Set flag
                     else:
                         all_debug.append("⚠ No 'Not Found' text detected.")
@@ -1573,7 +1582,7 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
             
             if not_found:
                 all_debug.append("NOT_FOUND_CAPTURE=TRUE")
-            # --- END "NOT FOUND" LOGIC ---
+            # --- END MODIFICATION ---
             
             browser.close()
             all_debug.append("\n✓ Browser closed")
@@ -1585,7 +1594,8 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
         traceback.print_exc()
     
     debug_output = "\n".join(all_debug)
-    return price_png, pay_png, url, debug_output
+    # --- MODIFIED: Return final_url ---
+    return price_png_path, pay_png_path, final_url, debug_output
 
 # -------------------- Entrypoint --------------------
 
