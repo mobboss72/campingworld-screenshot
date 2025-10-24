@@ -287,7 +287,8 @@
 
     .loading.active {
       display: block;
-      animation: pulse 1.5s ease-in-out infinite;
+      /* Remove pulse effect to prevent the spinning message from blinking */
+      /* animation: pulse 1.5s ease-in-out infinite; */ 
     }
 
     @keyframes pulse {
@@ -557,7 +558,8 @@
       loading.classList.add('active');
 
       // Defer the actual form submission slightly to ensure the browser 
-      // renders the spinner and message immediately.
+      // renders the spinner and message immediately before the synchronous 
+      // POST request blocks the thread.
       setTimeout(() => {
           form.submit();
       }, 10);
