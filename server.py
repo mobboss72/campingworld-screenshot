@@ -11,9 +11,7 @@ from typing import Optional, Tuple
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file
 from playwright.sync_api import sync_playwright, Page, BrowserContext, Locator
 
-# --------------------------------------------
-# Config
-# --------------------------------------------
+# ---------------------- Config ----------------------
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 PORT = int(os.getenv("PORT", "8080"))
 OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
@@ -22,9 +20,7 @@ app = Flask(__name__, static_folder=None)
 screenshot_cache: dict[str, str] = {}
 
 
-# --------------------------------------------
-# Utilities
-# --------------------------------------------
+# ---------------------- Utils -----------------------
 def https_date() -> Optional[str]:
     try:
         r = requests.head("https://cloudflare.com", timeout=8)
@@ -45,9 +41,7 @@ def unit_url(stock: str) -> str:
     return f"https://rv.campingworld.com/rv/{stock}"
 
 
-# --------------------------------------------
-# Flask routes
-# --------------------------------------------
+# ---------------------- Flask -----------------------
 @app.get("/")
 def root():
     return send_from_directory(".", "index.html")
@@ -153,9 +147,17 @@ def capture():
         return Response(f"Error: {e}", status=500)
 
 
-# --------------------------------------------
-# Playwright capture (two independent pages)
-# --------------------------------------------
+# -------------------- Playwright --------------------
+HIDE_NOISE_CSS = """
+/* hide typical chat / sticky widgets that steal hover */
+iframe[src*="chat"], iframe[title*="chat" i], [class*="chat" i], [id*="chat" i],
+#launcher, .drift-widget, .intercom-launcher, [class*="cookie" i], [id*="cookie" i] {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+"""
+
 def prepare_page(ctx: BrowserContext, url: str) -> Page:
     page = ctx.new_page()
     page.goto(url, wait_until="domcontentloaded")
@@ -164,7 +166,7 @@ def prepare_page(ctx: BrowserContext, url: str) -> Page:
     except Exception as e:
         print(f"networkidle timeout: {e}")
 
-    # Force Oregon pricing context
+    # ZIP / geo
     try:
         page.evaluate("""(zip)=>{
             try{ localStorage.setItem('cw_zip', zip); }catch(e){}
@@ -178,10 +180,18 @@ def prepare_page(ctx: BrowserContext, url: str) -> Page:
     except Exception as e:
         print(f"ZIP inject failed: {e}")
 
+    # hide overlays that can eat hover
+    try:
+        page.add_style_tag(content=HIDE_NOISE_CSS)
+    except Exception:
+        pass
+
     return page
 
 def capture_price_tooltip(page: Page, out_path: str) -> bool:
-    # === YOUR WORKING SNIPPET (kept intact) ===
+    """
+    Your previously working PRICE snippet, kept intact.
+    """
     try:
         page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", state="visible", timeout=15000)
     except Exception:
@@ -211,12 +221,11 @@ def capture_price_tooltip(page: Page, out_path: str) -> bool:
 
     try:
         visible_price.scroll_into_view_if_needed(timeout=5000)
-        # try an adjacent info icon first (some tooltips attach there)
+        # If there is an adjacent info icon, hover that; otherwise hover the price itself.
         icon = visible_price.locator("xpath=following::*[(self::button or self::*[name()='svg'] or contains(@class,'MuiSvgIcon-root'))][1]")
         trigger = icon.first if (icon.count() and icon.first.is_visible()) else visible_price
-
         trigger.hover(timeout=10000, force=True)
-        page.wait_for_timeout(1000)  # wait for tooltip
+        page.wait_for_timeout(1000)
         page.screenshot(path=out_path, full_page=True)
         print(f"Price full page screenshot saved to: {out_path}")
         return True
@@ -224,79 +233,124 @@ def capture_price_tooltip(page: Page, out_path: str) -> bool:
         print(f"Price hover failed: {e}")
         return False
 
-def capture_payment_tooltip(page: Page, out_path: str) -> bool:
-    # robust: prefer text that includes payment hints; hover/focus/click fallback
-    payment_selector = ".MuiTypography-root.MuiTypography-subtitle2:visible"
-    payment_elems = page.locator(payment_selector)
+def _tooltip_visible(page: Page) -> bool:
     try:
-        cnt = payment_elems.count()
-        print(f"Found {cnt} payment elements")
+        # your suggested selector also indicates a live tooltip (aria-describedby appears on trigger)
+        candidates = page.locator("[role='tooltip'], .MuiTooltip-popper, [data-popper-placement], span[aria-describedby*='mui-tooltip']")
+        return candidates.count() > 0 and candidates.first.is_visible()
     except Exception:
-        cnt = 0
+        return False
 
-    visible_payment: Optional[Locator] = None
-    for i in range(cnt):
+def _near(a, b, max_dist: float) -> bool:
+    if not a or not b:
+        return False
+    ax = a["x"] + a["width"]/2; ay = a["y"] + a["height"]/2
+    bx = b["x"] + b["width"]/2; by = b["y"] + b["height"]/2
+    dx = ax - bx; dy = ay - by
+    return (dx*dx + dy*dy) ** 0.5 <= max_dist
+
+def capture_payment_tooltip(page: Page, out_path: str) -> bool:
+    """
+    Robust payment finder that prefers text like "$…/mo", "payment", "per month", etc.
+    Then finds the nearest likely trigger (info icon / button / svg) and opens it.
+    Verifies by tooltip role/poppers OR span[aria-describedby*='mui-tooltip'].
+    """
+    # 1) Find the payment text block
+    payment_text = page.locator("text=/\\$?\\s*\\d[\\d,.]*\\s*\\/\\s*mo/i").first
+    if not (payment_text and payment_text.count()):
+        # broader fallback
+        payment_text = page.locator("text=/payment|per month|monthly|\\/mo/i").first
+    if not (payment_text and payment_text.count() and payment_text.is_visible()):
+        print("❌ Payment text element not found")
+        return False
+
+    try:
+        payment_text.scroll_into_view_if_needed(timeout=5000)
+    except Exception:
+        pass
+
+    pay_box = payment_text.bounding_box()
+    if not pay_box:
+        print("No bounding box for payment text")
+        return False
+
+    # 2) Try a very common inline info icon immediately following the text
+    try:
+        inline_icon = payment_text.locator(
+            "xpath=following::*[(self::button or self::*[name()='svg'] or contains(@class,'MuiSvgIcon-root') or self::span[contains(@class,'info')])][1]"
+        )
+        if inline_icon and inline_icon.count() and inline_icon.first.is_visible():
+            for action in ("hover", "focus", "click", "synthetic"):
+                try:
+                    t = inline_icon.first
+                    if action == "hover":
+                        t.hover(timeout=8000, force=True)
+                    elif action == "focus":
+                        t.focus()
+                    elif action == "click":
+                        t.click(timeout=3000)
+                    else:
+                        page.evaluate("""(el)=>{
+                            ['pointerover','mouseenter','mouseover','focusin','pointermove'].forEach(
+                              ty=>el.dispatchEvent(new MouseEvent(ty,{bubbles:true}))
+                            );
+                        }""", t)
+                    page.wait_for_timeout(300)
+                    if _tooltip_visible(page):
+                        page.screenshot(path=out_path, full_page=True)
+                        print(f"Payment full page screenshot saved to: {out_path} (inline icon)")
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    # 3) Scan nearby clickable/icon-ish elements and try them
+    candidates = page.locator(
+        "button, [role='button'], [aria-haspopup='true'], [aria-label*='info' i], [data-testid*='info' i], "
+        ".MuiSvgIcon-root, svg[focusable], span[role='img']"
+    )
+    try:
+        total = min(40, candidates.count())
+    except Exception:
+        total = 0
+
+    tried = 0
+    for i in range(total):
         try:
-            el = payment_elems.nth(i)
-            if el.is_visible():
-                txt = (el.text_content() or "").lower()
-                if any(k in txt for k in ("payment", "/mo", "per month", "monthly")):
-                    visible_payment = el
-                    print(f"Using payment element at index {i} with text: {txt}")
-                    break
+            c = candidates.nth(i)
+            if not c.is_visible():
+                continue
+            bb = c.bounding_box()
+            if not _near(bb, pay_box, 420):  # only test triggers reasonably close to payment text
+                continue
+            tried += 1
+            for action in ("hover", "focus", "click", "synthetic"):
+                try:
+                    if action == "hover":
+                        c.hover(timeout=6000, force=True)
+                    elif action == "focus":
+                        c.focus()
+                    elif action == "click":
+                        c.click(timeout=2500)
+                    else:
+                        page.evaluate("""(el)=>{
+                            ['pointerover','mouseenter','mouseover','focusin','pointermove'].forEach(
+                              ty=>el.dispatchEvent(new MouseEvent(ty,{bubbles:true}))
+                            );
+                        }""", c)
+                    page.wait_for_timeout(250)
+                    if _tooltip_visible(page):
+                        page.screenshot(path=out_path, full_page=True)
+                        print(f"Payment full page screenshot saved to: {out_path} (nearby trigger after {tried} tries)")
+                        return True
+                except Exception:
+                    continue
         except Exception:
             continue
 
-    if not visible_payment:
-        print("❌ Payment element not found by subtitle2; try broader selector")
-        # fallback: any element with payment-ish text
-        alt = page.locator("text=/.*(per month|/mo|payment).*/i").first
-        if alt and alt.count() and alt.is_visible():
-            visible_payment = alt
-
-    if not visible_payment:
-        return False
-
-    try:
-        visible_payment.scroll_into_view_if_needed(timeout=5000)
-        trigger: Locator = visible_payment
-        icon = visible_payment.locator("xpath=following::*[(self::button or self::*[name()='svg'] or contains(@class,'MuiSvgIcon-root'))][1]")
-        if icon.count() and icon.first.is_visible():
-            trigger = icon.first
-
-        opened = False
-        for action in ("hover", "focus", "click", "synthetic"):
-            try:
-                if action == "hover":
-                    trigger.hover(timeout=10000, force=True)
-                elif action == "focus":
-                    trigger.focus()
-                elif action == "click":
-                    trigger.click(timeout=4000)
-                else:
-                    page.evaluate(
-                        """(el)=>{
-                          ['pointerover','mouseenter','mouseover','focusin'].forEach(
-                            t=>el.dispatchEvent(new MouseEvent(t,{bubbles:true}))
-                          );
-                        }""",
-                        trigger,
-                    )
-                page.wait_for_timeout(300)
-                # simple visibility probe
-                t = page.locator("[role='tooltip'], .MuiTooltip-popper, [data-popper-placement], .MuiPopover-root")
-                if t.first.is_visible():
-                    opened = True
-                    break
-            except Exception:
-                continue
-
-        page.screenshot(path=out_path, full_page=True)
-        print(f"Payment full page screenshot saved to: {out_path} (opened={opened})")
-        return True
-    except Exception as e:
-        print(f"Payment hover failed: {e}")
-        return False
+    print("❌ Payment tooltip not found after scanning nearby triggers")
+    return False
 
 
 def do_capture(stock: str) -> Tuple[str, str, str]:
@@ -311,7 +365,10 @@ def do_capture(stock: str) -> Tuple[str, str, str]:
     print(f"TEMP DIR: {tmpdir}")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage"])
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage"]
+        )
         ctx = browser.new_context(
             viewport={"width":1920,"height":1080},
             permissions=["geolocation"],
@@ -320,7 +377,7 @@ def do_capture(stock: str) -> Tuple[str, str, str]:
             user_agent="Mozilla/5.0 Chrome"
         )
 
-        # IMPORTANT: use separate pages so the site can’t auto-close one tooltip when the other opens
+        # separate pages so popovers don't fight each other
         page_price = prepare_page(ctx, url)
         ok_price = capture_price_tooltip(page_price, price_png)
         try: page_price.close()
@@ -342,8 +399,6 @@ def do_capture(stock: str) -> Tuple[str, str, str]:
     return price_png, pay_png, url
 
 
-# --------------------------------------------
-# main
-# --------------------------------------------
+# ---------------------- Main ------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
