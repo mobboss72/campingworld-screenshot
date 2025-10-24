@@ -1,13 +1,13 @@
 # server.py
-import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io
-from flask import Flask, request, send_from_directory, Response, send_file, jsonify
+import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io, re # <-- RE is already imported
+from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from rfc3161ng import RemoteTimestamper, get_hash_oid
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, PageBreak
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from PIL import Image as PILImage
 import sqlite3
@@ -16,7 +16,7 @@ from functools import wraps
 import threading
 
 # Admin password
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "cwadmin2025") # Change this!
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "cwadmin2025")  # Change this!
 
 # Persist Playwright downloads
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
@@ -25,25 +25,37 @@ PORT = int(os.getenv("PORT", "8080"))
 DB_PATH = os.getenv("DB_PATH", "/app/data/captures.db")
 
 # Storage configuration
-STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")
+STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")  # Changed to persistent
 PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", "/app/data/captures")
-AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))
+AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))  # 90 days retention
 
-# CORRECTED Oregon Camping World locations
+# Oregon Camping World locations (alphabetical) with coordinates
 CW_LOCATIONS = {
     "bend": {"name": "Bend", "zip": "97701", "lat": 44.0582, "lon": -121.3153},
-    "eugene": {"name": "Coburg (Eugene)", "zip": "97408", "lat": 44.1130, "lon": -123.0805}, # Coburg ZIP
+    "eugene": {"name": "Eugene", "zip": "97402", "lat": 44.0521, "lon": -123.0868},
     "hillsboro": {"name": "Hillsboro", "zip": "97124", "lat": 45.5229, "lon": -122.9898},
     "medford": {"name": "Medford", "zip": "97504", "lat": 42.3265, "lon": -122.8756},
-    "portland": {"name": "Wood Village (Portland)", "zip": "97060", "lat": 45.5458, "lon": -122.4208}, # Wood Village ZIP
+    "portland": {"name": "Portland", "zip": "97201", "lat": 45.5152, "lon": -122.6784},
 }
 
-# --- Flask App Initialization ---
-app = Flask(__name__)
+# RFC 3161 Timestamp Authority URLs
+TSA_URLS = [
+    "http://timestamp.digicert.com",
+    "http://timestamp.apple.com/ts01",
+    "http://tsa.starfieldtech.com",
+    "http://rfc3161timestamp.globalsign.com/advanced",
+]
 
-# --- (Database and Utility functions) ---
+screenshot_cache = {}
+
+app = Flask(__name__, static_folder=None)
+app.secret_key = os.getenv("SECRET_KEY", "cw-compliance-secret-key-change-me")  # Change this!
+
+# -------------------- Database --------------------
+
 @contextmanager
 def get_db():
+    """Database connection context manager"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -57,6 +69,7 @@ def get_db():
         conn.close()
 
 def init_db():
+    """Initialize database tables"""
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS captures (
@@ -89,543 +102,1502 @@ def init_db():
 
 init_db()
 
-# Admin check placeholder (simplified for demo)
+# -------------------- Automatic Cleanup Scheduler --------------------
+
+def schedule_cleanup():
+    """Run cleanup every 24 hours"""
+    def cleanup_task():
+        while True:
+            time.sleep(24 * 60 * 60)  # 24 hours
+            print("🕐 Running scheduled cleanup...")
+            try:
+                result = cleanup_old_files(AUTO_CLEANUP_DAYS)
+                print(f"✓ Scheduled cleanup complete: {result['cleaned']} dirs, {result['size_mb']} MB freed")
+            except Exception as e:
+                print(f"❌ Scheduled cleanup failed: {e}")
+    
+    cleanup_thread = threading.Thread(target=cleanup_task, daemon=True)
+    cleanup_thread.start()
+    print(f"✓ Automatic cleanup scheduled (every 24 hours, {AUTO_CLEANUP_DAYS} day retention)")
+
+# Start cleanup scheduler
+schedule_cleanup()
+
+# -------------------- Admin Authentication --------------------
+
 def check_admin_auth():
-    # In a real app, this would check headers/sessions
-    return True # Always pass for demo
+    """Check if admin is authenticated via session or basic auth"""
+    # Check session first
+    from flask import session
+    if session.get('admin_authenticated'):
+        return True
+    
+    # Check basic auth
+    auth = request.authorization
+    if auth and auth.password == ADMIN_PASSWORD:
+        return True
+    
+    return False
 
 def require_admin_auth(f):
+    """Decorator to require admin authentication"""
     @wraps(f)
     def decorated(*args, **kwargs):
-        if not check_admin_auth():
-            return Response("Unauthorized. Admin password required.", status=401)
-        return f(*args, **kwargs)
+        if check_admin_auth():
+            return f(*args, **kwargs)
+        return Response(
+            'Authentication required',
+            401,
+            {'WWW-Authenticate': 'Basic realm="Admin Panel"'}
+        )
     return decorated
 
-# Placeholder for cleanup
-def cleanup_old_files(days_old): 
-    # Simulate cleanup
-    print(f"Cleaning up files older than {days_old} days...")
-    return {"cleaned": 12, "size_mb": 450}
+# -------------------- Cleanup Utilities --------------------
 
-# --- (generate_pdf_report remains the same - uses image scaling fix) ---
-def generate_pdf_report(pdf_data, price_png, pay_png, debug_output):
-    styles = getSampleStyleSheet()
-    style_h1 = styles['h1']
-    style_h1.alignment = TA_CENTER
-    style_body = styles['BodyText']
-    style_bold = ParagraphStyle('Bold', parent=style_body, fontName='Helvetica-Bold')
-    style_mono = ParagraphStyle('Mono', parent=style_body, fontName='Courier', fontSize=8, textColor=colors.grey)
-    style_disclosure_header = ParagraphStyle('DisclosureHeader', parent=style_bold, fontSize=14, spaceAfter=6, textColor=colors.blue)
-    style_disclosure_status = ParagraphStyle('DisclosureStatus', parent=style_body, fontSize=12, textColor=colors.darkred)
-    
-    doc = SimpleDocTemplate(
-        io.BytesIO(), 
-        pagesize=letter, 
-        topMargin=0.5 * inch, 
-        bottomMargin=0.5 * inch,
-        leftMargin=0.5 * inch,
-        rightMargin=0.5 * inch
-    )
-    story = []
-
-    # Title Page/Header
-    story.append(Paragraph("Camping World Compliance Capture Report", style_h1))
-    story.append(Spacer(1, 0.2 * inch))
-
-    # Metadata Table
-    data = [
-        [Paragraph("Stock Number:", style_bold), Paragraph(pdf_data.get('stock', 'N/A'), style_body)],
-        [Paragraph("Location:", style_bold), Paragraph(f"{pdf_data.get('location_name', 'N/A')} (ZIP: {pdf_data.get('zip_code', 'N/A')})", style_body)],
-        [Paragraph("URL:", style_bold), Paragraph(pdf_data.get('url', 'N/A'), style_body)],
-        [Paragraph("Capture Time (UTC):", style_bold), Paragraph(pdf_data.get('capture_utc', 'N/A'), style_body)],
-        [Paragraph("HTTPS Date:", style_bold), Paragraph(pdf_data.get('https_date', 'N/A'), style_body)],
-    ]
-    
-    table = Table(data, colWidths=[2*inch, 5*inch])
-    table.setStyle(TableStyle([
-        ('GRID', (0,0), (-1,-1), 0.5, colors.lightgrey),
-        ('ALIGN', (0,0), (0,-1), 'LEFT'),
-        ('ALIGN', (1,0), (1,-1), 'LEFT'),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('LEFTPADDING', (0,0), (-1,-1), 6),
-        ('RIGHTPADDING', (0,0), (-1,-1), 6),
-        ('FONTSIZE', (0,0), (-1,-1), 10),
-    ]))
-    story.append(table)
-    story.append(Spacer(1, 0.5 * inch))
-
-    story.append(Paragraph("Captured Disclosures", ParagraphStyle('SectionHeader', parent=style_h1, fontSize=18, spaceAfter=0.2*inch)))
-
-    # --- Price Disclosure ---
-    story.append(Paragraph("Price Disclosure", style_disclosure_header))
-    price_sha256 = pdf_data.get('price_sha256', '')
-    
-    if price_png and os.path.exists(price_png):
-        try:
-            img = PILImage.open(price_png)
-            width, height = img.size
-            target_width = 7.5 * inch
-            ratio = target_width / width
-            
-            story.append(Image(price_png, width=target_width, height=height * ratio))
-            story.append(Spacer(1, 0.1 * inch))
-            story.append(Paragraph(f"SHA-256 Hash: <code>{price_sha256}</code>", style_body))
-            story.append(Paragraph(f"Timestamp: {pdf_data.get('price_timestamp', 'N/A')} (TSA: {pdf_data.get('price_tsa', 'N/A')})", style_body))
-            
-        except Exception:
-            story.append(Paragraph("❌ Error loading price screenshot.", style_disclosure_status))
-            
-    else:
-        stock = pdf_data.get('stock', '').lower()
-        is_pre_owned = stock.endswith('p') 
-        
-        if is_pre_owned:
-            price_status_message = "Pre-Owned no additional pricing breakdown to display" 
-        else:
-            price_status_message = "Price disclosure not available" 
-            
-        story.append(Paragraph(price_status_message, style_disclosure_status))
-
-    story.append(Spacer(1, 0.5 * inch))
-
-    # --- Payment Disclosure ---
-    story.append(Paragraph("Payment Disclosure", style_disclosure_header))
-    payment_sha256 = pdf_data.get('payment_sha256', '')
-
-    if pay_png and os.path.exists(pay_png):
-        try:
-            img = PILImage.open(pay_png)
-            width, height = img.size
-            target_width = 7.5 * inch
-            ratio = target_width / width
-            
-            story.append(Image(pay_png, width=target_width, height=height * ratio))
-            story.append(Spacer(1, 0.1 * inch))
-            story.append(Paragraph(f"SHA-256 Hash: <code>{payment_sha256}</code>", style_body))
-            story.append(Paragraph(f"Timestamp: {pdf_data.get('payment_timestamp', 'N/A')} (TSA: {pdf_data.get('payment_tsa', 'N/A')})", style_body))
-
-        except Exception:
-            story.append(Paragraph("❌ Error loading payment screenshot.", style_disclosure_status))
-    else:
-        story.append(Paragraph("Payment disclosure not available", style_disclosure_status))
-
-    # Debug Info
-    story.append(Spacer(1, 0.5 * inch))
-    story.append(Paragraph("Capture Debug and Audit Log", ParagraphStyle('SectionHeader', parent=style_h1, fontSize=18, spaceAfter=0.2*inch)))
-    story.append(Paragraph("--- START DEBUG LOG ---", style_mono))
-    for line in debug_output.split('\n'):
-        if line.strip():
-            story.append(Paragraph(line, style_mono))
-    story.append(Paragraph("--- END DEBUG LOG ---", style_mono))
-    
-    buffer = doc.filename
-    doc.build(story)
-    
-    return buffer
-
-# --- do_capture (Restored full Playwright logic) ---
-def do_capture(url, lat, lon, store_zip_code, price_png_path, pay_png_path):
-    all_debug = []
-    initial_url = url # Preserve the input URL for comparison
-    final_url = initial_url
-    
+def cleanup_old_files(days_old=90):
+    """Clean up screenshot files and PDFs older than specified days"""
     try:
-        with sync_playwright() as p:
-            all_debug.append("✓ Launching Chromium browser...")
-            browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
-            
-            # Context for geolocation spoofing
-            all_debug.append(f"✓ Setting geolocation to: {lat}, {lon} (Store ZIP: {store_zip_code})")
-            context = browser.new_context(
-                geolocation={"latitude": lat, "longitude": lon},
-                permissions=['geolocation'],
-                user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-            )
-            page = context.new_page()
-            page.set_default_timeout(45000)
-            
-            all_debug.append(f"✓ Navigating to {initial_url}...")
-            response = page.goto(initial_url, wait_until="networkidle")
-            final_url = page.url
-            
-            # --- FIX: Log the final URL to verify redirects ---
-            if final_url != initial_url:
-                all_debug.append(f"i Redirect detected. Final URL reached: {final_url}")
-            else:
-                all_debug.append(f"✓ Final URL reached: {final_url}")
-            # ----------------------------------------------------
-            
-            # --- Capture Price Disclosure ---
-            all_debug.append("\n--- Capturing Price Disclosure ---")
-            price_png = None
-            is_pre_owned = initial_url.lower().endswith('p') 
-            
-            if is_pre_owned:
-                all_debug.append("i Pre-Owned unit detected. Skipping Price Breakdown (no additional disclosure expected).")
-            else:
+        cutoff_time = time.time() - (days_old * 24 * 60 * 60)
+        cleaned_count = 0
+        cleaned_size = 0
+        
+        # Clean up temp directories
+        temp_base = tempfile.gettempdir()
+        for item in os.listdir(temp_base):
+            if item.startswith("cw-"):
+                item_path = os.path.join(temp_base, item)
                 try:
-                    price_selector = page.locator('button:has-text("Price Breakdown"), a:has-text("Price Breakdown")')
-                    if price_selector.count() > 0:
-                        price_selector.first.click()
-                        all_debug.append("✓ Price Breakdown button clicked.")
-                        page.wait_for_selector("div.modal-content", state="visible", timeout=10000) # Common modal class
-                        
-                        page.locator("div.modal-content").screenshot(path=price_png_path)
-                        all_debug.append(f"✓ Price screenshot saved: {os.path.getsize(price_png_path)} bytes")
-                        price_png = price_png_path
-                    else:
-                        all_debug.append("i Price Breakdown button not found.")
-                        
+                    if os.path.isdir(item_path):
+                        dir_mtime = os.path.getmtime(item_path)
+                        if dir_mtime < cutoff_time:
+                            # Calculate size before deleting
+                            for root, dirs, files in os.walk(item_path):
+                                for f in files:
+                                    fp = os.path.join(root, f)
+                                    if os.path.exists(fp):
+                                        cleaned_size += os.path.getsize(fp)
+                            
+                            import shutil
+                            shutil.rmtree(item_path)
+                            cleaned_count += 1
+                            print(f"🧹 Cleaned up old directory: {item}")
                 except Exception as e:
-                    all_debug.append(f"❌ Price screenshot failed: {e}")
-
-            # --- Capture Payment Tooltip ---
-            all_debug.append("\n--- Capturing Payment Tooltip ---")
-            pay_png = None
-            
-            payment_selector = page.locator('button:has-text("Est. Payment"), a:has-text("$")')
-            
-            if payment_selector.count() > 0:
-                try:
-                    payment_selector.first.hover()
-                    all_debug.append("✓ Payment link hovered to show tooltip.")
-                    page.wait_for_timeout(1000) 
-                    
-                    page.screenshot(path=pay_png_path, full_page=True)
-                    all_debug.append(f"✓ Payment screenshot saved: {os.path.getsize(pay_png_path)} bytes")
-                    pay_png = pay_png_path
-                except Exception as e:
-                    all_debug.append(f"❌ Payment screenshot failed: {e}")
-            else:
-                all_debug.append("i Payment trigger element not found.")
-            
-            browser.close()
-            all_debug.append("\n✓ Browser closed")
-    
-    except PlaywrightTimeout as e:
-        all_debug.append(f"❌ Playwright Timeout Error: {e}")
-    except Exception as e:
-        all_debug.append(f"\n❌ CRITICAL ERROR: {str(e)}")
-        all_debug.append(traceback.format_exc())
-
-    # Final file existence check for return values
-    price_png = price_png if price_png and os.path.exists(price_png) and os.path.getsize(price_png) > 0 else None
-    pay_png = pay_png if pay_png and os.path.exists(pay_png) and os.path.getsize(pay_png) > 0 else None
-
-    debug_output = "\n".join(all_debug)
-    return price_png, pay_png, final_url, debug_output
-
-# -------------------- Routes --------------------
-
-@app.post("/capture")
-def capture_rv():
-    """Initiates the Playwright capture process and returns the PDF."""
-    
-    location_key = request.form.get("location")
-    stock = request.form.get("stock", "").strip().upper()
-    
-    if not location_key or not stock:
-        return Response("Missing required fields (location, stock)", status=400)
-    
-    location_data = CW_LOCATIONS.get(location_key.lower())
-    if not location_data:
-        return Response("Invalid location selected", status=400)
-
-    print(f"--- Capture requested: {stock} @ {location_data['name']} (Store ZIP: {location_data['zip']}) ---")
-    
-    url = f"https://rv.campingworld.com/rv/{stock.lower()}"
-    
-    temp_dir = tempfile.mkdtemp(prefix="cw-")
-    price_png_path = os.path.join(temp_dir, f"{stock}_price.png")
-    pay_png_path = os.path.join(temp_dir, f"{stock}_payment.png")
-    
-    try:
-        price_png, pay_png, final_url, debug_output = do_capture(
-            url, 
-            location_data['lat'], 
-            location_data['lon'], 
-            location_data['zip'], 
-            price_png_path, 
-            pay_png_path
-        )
-    except Exception as e:
-        traceback.print_exc()
-        return Response(f"Capture failed unexpectedly: {e}", status=500)
-
-    # 4. Process captures for TSA and Hashes 
-    capture_utc = datetime.datetime.utcnow().isoformat() + " UTC"
-    https_date = datetime.datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
-    
-    # Calculate real SHA-256 hashes if files exist
-    price_sha256 = 'N/A'
-    if price_png:
-        with open(price_png, 'rb') as f:
-            price_sha256 = hashlib.sha256(f.read()).hexdigest()
-            
-    payment_sha256 = 'N/A'
-    if pay_png:
-        with open(pay_png, 'rb') as f:
-            payment_sha256 = hashlib.sha256(f.read()).hexdigest()
-
-    # Placeholder for TSA (Timestamp Authority) data
-    price_timestamp = capture_utc
-    payment_timestamp = capture_utc
-    price_tsa = 'TSA_PLACEHOLDER'
-    payment_tsa = 'TSA_PLACEHOLDER'
-
-    # 5. Generate PDF Report
-    pdf_data = {
-        'stock': stock,
-        'location': location_key,
-        'location_name': location_data['name'],
-        'zip_code': location_data['zip'], 
-        'url': final_url, # Use the actual final URL
-        'capture_utc': capture_utc,
-        'https_date': https_date,
-        'price_sha256': price_sha256,
-        'payment_sha256': payment_sha256,
-        'price_timestamp': price_timestamp,
-        'price_tsa': price_tsa,
-        'payment_timestamp': payment_timestamp,
-        'payment_tsa': payment_tsa,
-    }
-    
-    pdf_buffer = generate_pdf_report(pdf_data, price_png, pay_png, debug_output)
-
-    # 6. Save data to DB and storage
-    os.makedirs(PERSISTENT_STORAGE_PATH, exist_ok=True)
-    final_pdf_path = os.path.join(PERSISTENT_STORAGE_PATH, f"CW_Capture_{stock}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.pdf")
-    
-    with open(final_pdf_path, 'wb') as f:
-        pdf_buffer.seek(0)
-        f.write(pdf_buffer.read())
-
-    # Save metadata to database
-    with get_db() as conn:
-        conn.execute("""
-            INSERT INTO captures (stock, location, zip_code, url, capture_utc, https_date, price_sha256, payment_sha256, price_screenshot_path, payment_screenshot_path, price_tsa, price_timestamp, payment_tsa, payment_timestamp, pdf_path, debug_info)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            stock, 
-            location_key, 
-            location_data['zip'], 
-            final_url, 
-            capture_utc, 
-            https_date, 
-            price_sha256, 
-            payment_sha256, 
-            price_png_path if price_png else None, # Use path in temp_dir for DB
-            pay_png_path if pay_png else None, # Use path in temp_dir for DB
-            price_tsa, 
-            price_timestamp, 
-            payment_tsa, 
-            payment_timestamp, 
-            final_pdf_path, 
-            debug_output
-        ))
+                    print(f"⚠ Could not clean {item_path}: {e}")
         
-    # 7. Return the PDF file
-    pdf_buffer.seek(0)
-    response = send_file(
-        pdf_buffer,
-        download_name=f"CW_Compliance_Capture_{stock}_{location_data['name'].replace(' ', '_')}.pdf",
-        mimetype="application/pdf",
-        as_attachment=True
-    )
-    
-    return response
-
-# --- History View (History and Filters restored) ---
-@app.get("/history")
-@require_admin_auth
-def history():
-    with get_db() as conn:
-        captures = conn.execute("SELECT * FROM captures ORDER BY created_at DESC").fetchall()
-
-    history_rows = ""
-    if not captures:
-        history_rows = '<tr><td colspan="7" style="text-align: center; padding: 20px; color: #6e6e73;">No capture history found.</td></tr>'
-    else:
-        for cap in captures:
-            status = "✅ Success" if cap['pdf_path'] else "❌ Failed"
-            status_color = "color: green;" if cap['pdf_path'] else "color: red;"
-            
-            download_link = f'<a href="/download/{cap["id"]}" style="background: #0071e3; color: white; text-decoration: none; padding: 4px 8px; border-radius: 4px; font-size: 12px; display: inline-block;">PDF</a>' if cap['pdf_path'] else 'N/A'
-            
-            history_rows += f"""
-            <tr>
-                <td>{cap['stock']}</td>
-                <td>{cap['location'].upper()}</td>
-                <td>{cap['zip_code']}</td>
-                <td>{cap['capture_utc'].split('T')[0]}</td>
-                <td style="{status_color}">{status}</td>
-                <td><code style="font-size: 10px; background: #f5f5f7; padding: 2px 4px; border-radius: 4px;">{cap['price_sha256'][:8]}...</code></td>
-                <td>{download_link}</td>
-            </tr>
-            """
-
-    # History HTML Template (Minimal styles to match the index page look)
-    history_html = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>Capture History</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-        <style>
-            body {{ font-family: 'Inter', sans-serif; background: #fbfbfd; color: #1d1d1f; line-height: 1.6; padding-top: 20px; }}
-            .container {{ max-width: 1200px; margin: 0 auto; padding: 0 22px; }}
-            h1 {{ font-size: 32px; margin-bottom: 10px; color: #0071e3; font-weight: 600; }}
-            .back-link {{ margin-bottom: 20px; display: inline-block; text-decoration: none; color: #6e6e73; font-size: 15px; }}
-            table {{ width: 100%; border-collapse: collapse; background: white; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border-radius: 8px; overflow: hidden; margin-top: 20px; }}
-            th, td {{ padding: 12px 15px; border-bottom: 1px solid #e9e9e9; text-align: left; font-size: 14px; }}
-            th {{ background: #f5f5f7; font-weight: 600; color: #6e6e73; }}
-            tr:hover {{ background: #f0f8ff; }}
-            .filters {{ margin-bottom: 20px; display: flex; gap: 10px; }}
-            .filters input, .filters select {{ padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-family: inherit; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <a href="/" class="back-link">← Back to Capture</a>
-            <h1>Compliance Capture History</h1>
-            <p style="margin-bottom: 20px; color: #6e6e73; font-size: 16px;">Audit trail of all previous compliance captures.</p>
-
-            <div class="filters">
-                <input type="text" id="filterStock" placeholder="Filter by Stock Number..." onkeyup="filterTable()">
-                <select id="filterLocation" onchange="filterTable()">
-                    <option value="">All Locations</option>
-                    {''.join([f'<option value="{key.upper()}">{data["name"]}</option>' for key, data in CW_LOCATIONS.items()])}
-                </select>
-            </div>
-
-            <table id="historyTable">
-                <thead>
-                    <tr>
-                        <th>Stock #</th>
-                        <th>Location</th>
-                        <th>ZIP</th>
-                        <th>Date</th>
-                        <th>Status</th>
-                        <th>Price Hash</th>
-                        <th>Report</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {history_rows}
-                </tbody>
-            </table>
-        </div>
-        <script>
-            function filterTable() {{
-                const stockFilter = document.getElementById('filterStock').value.toUpperCase();
-                const locationFilter = document.getElementById('filterLocation').value;
-                const table = document.getElementById('historyTable');
-                const rows = table.getElementsByTagName('tr');
-
-                for (let i = 1; i < rows.length; i++) {{ // Start at 1 to skip header
-                    const row = rows[i];
-                    const stockCell = row.cells[0].textContent.toUpperCase();
-                    const locationCell = row.cells[1].textContent.toUpperCase();
-                    
-                    const stockMatch = stockCell.indexOf(stockFilter) > -1;
-                    const locationMatch = locationFilter === '' || locationCell.indexOf(locationFilter) > -1;
-
-                    if (stockMatch && locationMatch) {{
-                        row.style.display = '';
-                    }} else {{
-                        row.style.display = 'none';
-                    }}
-                }}
-            }}
-        </script>
-    </body>
-    </html>
-    """
-    return Response(history_html, mimetype="text/html")
-
-# --- Admin View (Admin route implemented) ---
-@app.get("/admin")
-@require_admin_auth
-def admin():
-    try:
-        with get_db() as conn:
-            total_captures = conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0]
-            # Placeholder for last cleanup time
-            last_cleanup = "Never"
-    except Exception:
-        total_captures = "DB Error"
-        last_cleanup = "N/A"
-
-    admin_html = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>Admin Panel</title>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-        <style>
-            body {{ font-family: 'Inter', sans-serif; background: #fbfbfd; color: #1d1d1f; line-height: 1.6; padding-top: 20px; }}
-            .container {{ max-width: 800px; margin: 0 auto; padding: 0 22px; }}
-            h1 {{ font-size: 32px; margin-bottom: 20px; color: #0071e3; font-weight: 600; }}
-            .back-link {{ margin-bottom: 20px; display: inline-block; text-decoration: none; color: #6e6e73; font-size: 15px; }}
-            .card {{ background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px; border: 1px solid #e9e9e9; }}
-            .card h2 {{ font-size: 22px; margin-bottom: 15px; color: #1d1d1f; }}
-            .card p {{ margin-bottom: 8px; color: #6e6e73; }}
-            .action-link {{ display: inline-block; margin-top: 15px; padding: 10px 18px; background: #ff4500; color: white; text-decoration: none; border-radius: 8px; font-weight: 500; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <a href="/" class="back-link">← Back to Capture</a>
-            <h1>Admin Panel</h1>
-            <div class="card">
-                <h2>System Statistics</h2>
-                <p>Total Captures: <strong>{total_captures}</strong></p>
-                <p>Storage Path: <code>{PERSISTENT_STORAGE_PATH}</code></p>
-                <p>Last Cleanup: {last_cleanup}</p>
-            </div>
-            <div class="card">
-                <h2>Maintenance</h2>
-                <p>Run cleanup to remove old screenshot files (retaining audit records). Current files older than {AUTO_CLEANUP_DAYS} days are eligible for deletion.</p>
-                <a href="/admin/cleanup" class="action-link">Run File Cleanup</a>
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-    return Response(admin_html, mimetype="text/html")
-
-
-# --- File Download Route (essential for history links) ---
-@app.get("/download/<int:capture_id>")
-def download_pdf(capture_id):
-    with get_db() as conn:
-        capture = conn.execute("SELECT * FROM captures WHERE id = ?", (capture_id,)).fetchone()
-    
-    if not capture:
-        return Response("Capture not found.", status=404)
+        # Clean up persistent storage if enabled
+        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
+            for item in os.listdir(PERSISTENT_STORAGE_PATH):
+                if item.startswith("cw-"):
+                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    try:
+                        if os.path.isdir(item_path):
+                            dir_mtime = os.path.getmtime(item_path)
+                            if dir_mtime < cutoff_time:
+                                # Calculate size before deleting
+                                for root, dirs, files in os.walk(item_path):
+                                    for f in files:
+                                        fp = os.path.join(root, f)
+                                        if os.path.exists(fp):
+                                            cleaned_size += os.path.getsize(fp)
+                                
+                                import shutil
+                                shutil.rmtree(item_path)
+                                cleaned_count += 1
+                                print(f"🧹 Cleaned up old persistent directory: {item}")
+                    except Exception as e:
+                        print(f"⚠ Could not clean {item_path}: {e}")
         
-    pdf_path = capture['pdf_path']
-    if not pdf_path or not os.path.exists(pdf_path):
-        return Response("PDF file not found on disk.", status=404)
+        cleaned_size_mb = cleaned_size / (1024 * 1024)
+        print(f"✓ Cleanup complete: removed {cleaned_count} directories ({cleaned_size_mb:.2f} MB)")
+        return {"cleaned": cleaned_count, "size_mb": round(cleaned_size_mb, 2)}
+    except Exception as e:
+        print(f"❌ Cleanup failed: {e}")
+        return {"cleaned": 0, "size_mb": 0}
 
-    # Use the full path and the original download name
-    return send_file(pdf_path, as_attachment=True, download_name=os.path.basename(pdf_path))
-
-# --- Cleanup Route Placeholder ---
 @app.get("/admin/cleanup")
 @require_admin_auth
 def admin_cleanup():
-    result = cleanup_old_files(AUTO_CLEANUP_DAYS)
-    return Response(f"<h1>Cleanup Complete</h1><p>Removed {result['cleaned']} files, saving {result['size_mb']} MB.</p><p><a href='/admin'>Go Back to Admin</a></p>", mimetype="text/html")
+    """Manual cleanup endpoint"""
+    days = request.args.get("days", AUTO_CLEANUP_DAYS, type=int)
+    result = cleanup_old_files(days)
+    return jsonify({"cleaned": result["cleaned"], "size_mb": result["size_mb"], "days_old": days})
 
+@app.get("/admin/storage")
+@require_admin_auth
+def admin_storage():
+    """View storage status"""
+    try:
+        with get_db() as conn:
+            total_captures = conn.execute("SELECT COUNT(*) as count FROM captures").fetchone()['count']
+            
+            existing_pdfs = conn.execute(
+                "SELECT COUNT(*) as count FROM captures WHERE pdf_path IS NOT NULL"
+            ).fetchone()['count']
+            
+            files_exist = 0
+            files_missing = 0
+            for row in conn.execute("SELECT pdf_path FROM captures WHERE pdf_path IS NOT NULL"):
+                if row['pdf_path'] and os.path.exists(row['pdf_path']):
+                    files_exist += 1
+                else:
+                    files_missing += 1
+        
+        # Calculate temp storage
+        temp_size = 0
+        temp_dirs = 0
+        temp_base = tempfile.gettempdir()
+        for item in os.listdir(temp_base):
+            if item.startswith("cw-"):
+                item_path = os.path.join(temp_base, item)
+                if os.path.isdir(item_path):
+                    temp_dirs += 1
+                    for root, dirs, files in os.walk(item_path):
+                        for f in files:
+                            fp = os.path.join(root, f)
+                            if os.path.exists(fp):
+                                temp_size += os.path.getsize(fp)
+        
+        # Calculate persistent storage
+        persistent_size = 0
+        persistent_dirs = 0
+        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
+            for item in os.listdir(PERSISTENT_STORAGE_PATH):
+                if item.startswith("cw-"):
+                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    if os.path.isdir(item_path):
+                        persistent_dirs += 1
+                        for root, dirs, files in os.walk(item_path):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                if os.path.exists(fp):
+                                    persistent_size += os.path.getsize(fp)
+        
+        temp_size_mb = temp_size / (1024 * 1024)
+        persistent_size_mb = persistent_size / (1024 * 1024)
+        total_size_mb = temp_size_mb + persistent_size_mb
+        
+        # Calculate estimated max storage (90 days, 3/day)
+        estimated_max_captures = 90 * 3  # 270 captures
+        estimated_max_size_mb = estimated_max_captures * 5  # ~5MB per capture
+        
+        return jsonify({
+            "storage_mode": STORAGE_MODE,
+            "auto_cleanup_days": AUTO_CLEANUP_DAYS,
+            "database": {
+                "total_captures": total_captures,
+                "pdfs_in_db": existing_pdfs,
+                "files_exist": files_exist,
+                "files_missing": files_missing
+            },
+            "temp_storage": {
+                "directories": temp_dirs,
+                "size_mb": round(temp_size_mb, 2)
+            },
+            "persistent_storage": {
+                "directories": persistent_dirs,
+                "size_mb": round(persistent_size_mb, 2)
+            },
+            "total_storage": {
+                "size_mb": round(total_size_mb, 2),
+                "size_gb": round(total_size_mb / 1024, 2)
+            },
+            "estimates": {
+                "max_captures_90_days": estimated_max_captures,
+                "estimated_max_size_mb": estimated_max_size_mb,
+                "estimated_max_size_gb": round(estimated_max_size_mb / 1024, 2),
+                "plan_limit_gb": 100,
+                "estimated_usage_percent": round((estimated_max_size_mb / 1024 / 100) * 100, 2)
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# -------------------- Routes --------------------
 
 @app.get("/")
 def root():
     return send_from_directory(".", "index.html")
 
+@app.get("/admin")
+@require_admin_auth
+def admin_dashboard():
+    """Admin dashboard"""
+    try:
+        # Get storage stats
+        with get_db() as conn:
+            total_captures = conn.execute("SELECT COUNT(*) as count FROM captures").fetchone()['count']
+            
+            # Captures by location
+            location_stats = conn.execute("""
+                SELECT location, COUNT(*) as count 
+                FROM captures 
+                GROUP BY location 
+                ORDER BY count DESC
+            """).fetchall()
+            
+            # Recent captures
+            recent_captures = conn.execute("""
+                SELECT id, stock, location, capture_utc, price_sha256, payment_sha256
+                FROM captures
+                ORDER BY created_at DESC
+                LIMIT 20
+            """).fetchall()
+            
+            # Captures per day (last 30 days)
+            daily_stats = conn.execute("""
+                SELECT DATE(created_at) as date, COUNT(*) as count
+                FROM captures
+                WHERE created_at >= DATE('now', '-30 days')
+                GROUP BY DATE(created_at)
+                ORDER BY date DESC
+            """).fetchall()
+        
+        # Calculate storage
+        temp_size = 0
+        persistent_size = 0
+        
+        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
+            for item in os.listdir(PERSISTENT_STORAGE_PATH):
+                if item.startswith("cw-"):
+                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    if os.path.isdir(item_path):
+                        for root, dirs, files in os.walk(item_path):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                if os.path.exists(fp):
+                                    persistent_size += os.path.getsize(fp)
+        
+        total_size_mb = (temp_size + persistent_size) / (1024 * 1024)
+        estimated_max_mb = 270 * 5  # 270 captures * 5MB
+        usage_percent = (total_size_mb / estimated_max_mb * 100) if estimated_max_mb > 0 else 0
+        
+        html = render_template_string("""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Admin Dashboard - CW Compliance</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, sans-serif; background: #f5f7fb; color: #1d1d1f; padding: 20px; }
+    .container { max-width: 1400px; margin: 0 auto; }
+    header { background: linear-gradient(135deg, #003087 0%, #0055a4 100%); color: white; padding: 24px; border-radius: 12px; margin-bottom: 24px; }
+    header h1 { font-size: 28px; margin-bottom: 8px; }
+    header p { opacity: 0.9; font-size: 14px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .stat-card h3 { font-size: 14px; color: #6b7280; margin-bottom: 8px; font-weight: 500; }
+    .stat-card .value { font-size: 32px; font-weight: 700; color: #1d1d1f; }
+    .stat-card .subvalue { font-size: 13px; color: #9ca3af; margin-top: 4px; }
+    .section { background: white; padding: 24px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 24px; }
+    .section h2 { font-size: 20px; margin-bottom: 16px; color: #1d1d1f; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 12px; background: #f9fafb; font-weight: 600; font-size: 13px; color: #374151; }
+    td { padding: 12px; border-bottom: 1px solid #e5e7eb; font-size: 14px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover { background: #f9fafb; }
+    .location-badge { display: inline-block; padding: 4px 10px; background: #e0e7ff; color: #3730a3; border-radius: 6px; font-size: 12px; font-weight: 600; }
+    .progress-bar { width: 100%; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #10b981 0%, #059669 100%); transition: width 0.3s; }
+    .btn { display: inline-block; padding: 10px 20px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; border: none; cursor: pointer; }
+    .btn:hover { background: #1d4ed8; }
+    .btn-secondary { background: #6b7280; }
+    .btn-secondary:hover { background: #4b5563; }
+    .btn-danger { background: #dc2626; }
+    .btn-danger:hover { background: #b91c1c; }
+    .actions { display: flex; gap: 12px; margin-top: 16px; }
+    .back-link { color: #2563eb; text-decoration: none; font-weight: 600; font-size: 14px; }
+    .back-link:hover { text-decoration: underline; }
+    code { font-family: 'Monaco', monospace; font-size: 11px; background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🔐 Admin Dashboard</h1>
+      <p>CW Compliance Capture Tool - System Overview</p>
+    </header>
+
+    <div style="margin-bottom: 16px;">
+      <a href="/" class="back-link">← Back to Main Site</a>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <h3>Total Captures</h3>
+        <div class="value">{{total_captures}}</div>
+        <div class="subvalue">All time</div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Storage Used</h3>
+        <div class="value">{{total_size_mb|round(2)}} MB</div>
+        <div class="subvalue">{{usage_percent|round(1)}}% of estimated max</div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {{usage_percent if usage_percent < 100 else 100}}%"></div>
+        </div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Storage Mode</h3>
+        <div class="value" style="font-size: 20px;">{{storage_mode.upper()}}</div>
+        <div class="subvalue">{{cleanup_days}} day retention</div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Estimated Max</h3>
+        <div class="value">{{estimated_max_mb|round(0)|int}} MB</div>
+        <div class="subvalue">270 captures @ 5MB each</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>📊 Captures by Location</h2>
+      {% if location_stats %}
+        <table>
+          <thead>
+            <tr>
+              <th>Location</th>
+              <th>Capture Count</th>
+              <th>Percentage</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for loc in location_stats %}
+            <tr>
+              <td><span class="location-badge">{{loc.location}}</span></td>
+              <td>{{loc.count}}</td>
+              <td>{{(loc.count / total_captures * 100)|round(1)}}%</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #6b7280;">No captures yet</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2>📅 Daily Activity (Last 30 Days)</h2>
+      {% if daily_stats %}
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Captures</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for day in daily_stats[:10] %}
+            <tr>
+              <td>{{day.date}}</td>
+              <td>{{day.count}}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #6b7280;">No recent activity</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2>🕐 Recent Captures</h2>
+      {% if recent_captures %}
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Stock</th>
+              <th>Location</th>
+              <th>Capture Time</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for capture in recent_captures[:10] %}
+            <tr>
+              <td>{{capture.id}}</td>
+              <td><strong>{{capture.stock}}</strong></td>
+              <td><span class="location-badge">{{capture.location}}</span></td>
+              <td>{{capture.capture_utc}}</td>
+              <td><a href="/view/{{capture.id}}" class="btn" style="padding: 6px 12px; font-size: 12px;">View PDF</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #6b7280;">No captures yet</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2>🧹 Maintenance Actions</h2>
+      <p style="color: #6b7280; margin-bottom: 16px;">Manage storage and cleanup operations</p>
+      <div class="actions">
+        <button onclick="runCleanup()" class="btn btn-secondary">Run Cleanup Now</button>
+        <a href="/admin/storage" class="btn btn-secondary" target="_blank">View Storage API</a>
+        <a href="/history" class="btn">View All Captures</a>
+      </div>
+      <div id="cleanupResult" style="margin-top: 16px; padding: 12px; background: #f3f4f6; border-radius: 8px; display: none;"></div>
+    </div>
+
+    <div class="section">
+      <h2>⚙️ System Configuration</h2>
+      <table>
+        <tr>
+          <td><strong>Storage Mode</strong></td>
+          <td>{{storage_mode}}</td>
+        </tr>
+        <tr>
+          <td><strong>Auto Cleanup Days</strong></td>
+          <td>{{cleanup_days}} days</td>
+        </tr>
+        <tr>
+          <td><strong>Database Path</strong></td>
+          <td><code>{{db_path}}</code></td>
+        </tr>
+        <tr>
+          <td><strong>Persistent Storage Path</strong></td>
+          <td><code>{{storage_path}}</code></td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    async function runCleanup() {
+      const result = document.getElementById('cleanupResult');
+      result.style.display = 'block';
+      result.innerHTML = '⏳ Running cleanup...';
+      
+      try {
+        const response = await fetch('/admin/cleanup?days={{cleanup_days}}');
+        const data = await response.json();
+        result.innerHTML = `✅ Cleanup complete: Removed ${data.cleaned} directories, freed ${data.size_mb} MB`;
+        result.style.background = '#d1fae5';
+        result.style.color = '#065f46';
+      } catch (error) {
+        result.innerHTML = `❌ Cleanup failed: ${error.message}`;
+        result.style.background = '#fee2e2';
+        result.style.color = '#991b1b';
+      }
+    }
+  </script>
+</body>
+</html>
+        """, 
+        total_captures=total_captures,
+        location_stats=location_stats,
+        recent_captures=recent_captures,
+        daily_stats=daily_stats,
+        total_size_mb=total_size_mb,
+        estimated_max_mb=estimated_max_mb,
+        usage_percent=usage_percent,
+        storage_mode=STORAGE_MODE,
+        cleanup_days=AUTO_CLEANUP_DAYS,
+        db_path=DB_PATH,
+        storage_path=PERSISTENT_STORAGE_PATH
+        )
+        return Response(html, mimetype="text/html")
+    except Exception as e:
+        return Response(f"Error loading dashboard: {e}", status=500)
+
+@app.get("/screenshot/<sid>")
+def serve_shot(sid):
+    path = screenshot_cache.get(sid)
+    if not path or not os.path.exists(path):
+        return Response("Screenshot not found", status=404)
+    return send_file(path, mimetype="image/png")
+
+@app.get("/history")
+def history():
+    # Get filter parameters
+    location_filter = request.args.get("location", "").strip()
+    stock_filter = request.args.get("stock", "").strip()
+    sort_by = request.args.get("sort", "date_desc")
+    
+    with get_db() as conn:
+        query = "SELECT id, stock, location, capture_utc, price_sha256, payment_sha256 FROM captures WHERE 1=1"
+        params = []
+        
+        # Apply filters
+        if location_filter and location_filter.lower() != "all":
+            # Match against the capitalized location name (e.g., "Portland", "Bend")
+            location_name = location_filter.capitalize()
+            query += " AND location = ?"
+            params.append(location_name)
+        
+        if stock_filter:
+            query += " AND stock LIKE ?"
+            params.append(f"%{stock_filter}%")
+        
+        # Apply sorting
+        if sort_by == "date_asc":
+            query += " ORDER BY created_at ASC"
+        elif sort_by == "stock_asc":
+            query += " ORDER BY stock ASC"
+        elif sort_by == "stock_desc":
+            query += " ORDER BY stock DESC"
+        elif sort_by == "location":
+            query += " ORDER BY location ASC, created_at DESC"
+        else:  # date_desc (default)
+            query += " ORDER BY created_at DESC"
+        
+        query += " LIMIT 100"
+        
+        captures = conn.execute(query, params).fetchall()
+    
+    html = render_template_string("""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Capture History</title>
+  <style>
+    body{font-family:Inter,Arial,sans-serif;background:#f3f4f6;margin:0;padding:24px;color:#111}
+    h1{margin:0 0 16px}
+    .back{display:inline-block;margin-bottom:16px;color:#2563eb;text-decoration:none;font-weight:600}
+    .back:hover{text-decoration:underline}
+    .filters{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+    .filter-group{display:flex;flex-direction:column;gap:6px}
+    .filter-group label{font-size:13px;font-weight:600;color:#374151}
+    .filter-group select,.filter-group input{padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:14px}
+    .filter-group button{background:#2563eb;color:#fff;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:600}
+    .filter-group button:hover{background:#1d4ed8}
+    .stats{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:14px;color:#6b7280}
+    table{width:100%;background:#fff;border-collapse:collapse;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
+    th{background:#2563eb;color:#fff;padding:12px;text-align:left;font-weight:600;font-size:13px}
+    td{padding:12px;border-bottom:1px solid #e5e7eb;font-size:14px}
+    tr:last-child td{border-bottom:none}
+    tr:hover{background:#f9fafb}
+    .view-btn{background:#2563eb;color:#fff;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:13px;display:inline-block}
+    .view-btn:hover{background:#1d4ed8}
+    .empty{text-align:center;padding:40px;color:#666;background:#fff;border-radius:8px}
+    .location-badge{display:inline-block;padding:4px 8px;background:#e0e7ff;color:#3730a3;border-radius:4px;font-size:12px;font-weight:600}
+    @media(max-width:768px){
+      .filters{grid-template-columns:1fr}
+      table{font-size:12px}
+      th,td{padding:8px}
+    }
+  </style>
+</head>
+<body>
+  <a href="/" class="back">← Back to Capture Tool</a>
+  <h1>Capture History</h1>
+  
+  <form method="GET" action="/history" class="filters">
+    <div class="filter-group">
+      <label for="stock">Search by Stock Number</label>
+      <input type="text" name="stock" id="stock" placeholder="Enter stock number..." value="{{stock_filter or ''}}">
+    </div>
+    
+    <div class="filter-group">
+      <label for="location">Filter by Location</label>
+      <select name="location" id="location">
+        <option value="all" {{'selected' if not location_filter or location_filter.lower() == 'all' else ''}}>All Locations</option>
+        <option value="bend" {{'selected' if location_filter.lower() == 'bend' else ''}}>Bend</option>
+        <option value="eugene" {{'selected' if location_filter.lower() == 'eugene' else ''}}>Eugene</option>
+        <option value="hillsboro" {{'selected' if location_filter.lower() == 'hillsboro' else ''}}>Hillsboro</option>
+        <option value="medford" {{'selected' if location_filter.lower() == 'medford' else ''}}>Medford</option>
+        <option value="portland" {{'selected' if location_filter.lower() == 'portland' else ''}}>Portland</option>
+      </select>
+    </div>
+    
+    <div class="filter-group">
+      <label for="sort">Sort By</label>
+      <select name="sort" id="sort">
+        <option value="date_desc" {{'selected' if sort_by == 'date_desc' else ''}}>Date (Newest First)</option>
+        <option value="date_asc" {{'selected' if sort_by == 'date_asc' else ''}}>Date (Oldest First)</option>
+        <option value="stock_asc" {{'selected' if sort_by == 'stock_asc' else ''}}>Stock (Low to High)</option>
+        <option value="stock_desc" {{'selected' if sort_by == 'stock_desc' else ''}}>Stock (High to Low)</option>
+        <option value="location" {{'selected' if sort_by == 'location' else ''}}>Location (A-Z)</option>
+      </select>
+    </div>
+    
+    <div class="filter-group" style="justify-content:flex-end;display:flex;gap:8px">
+      <label>&nbsp;</label>
+      <div style="display:flex;gap:8px">
+        <button type="submit" style="background:#2563eb">Apply Filters</button>
+        <a href="/history" style="background:#6b7280;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-flex;align-items:center">Reset</a>
+      </div>
+    </div>
+  </form>
+  
+  <div class="stats">
+    Showing {{captures|length}} capture(s)
+    {% if location_filter and location_filter.lower() != 'all' %} · Filtered by location: <strong>{{location_filter.capitalize()}}</strong>{% endif %}
+    {% if stock_filter %} · Search: <strong>{{stock_filter}}</strong>{% endif %}
+  </div>
+  
+  {% if captures %}
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Stock</th>
+        <th>Location</th>
+        <th>Capture Time (UTC)</th>
+        <th>Price Hash</th>
+        <th>Payment Hash</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for capture in captures %}
+      <tr>
+        <td>{{capture.id}}</td>
+        <td><strong>{{capture.stock}}</strong></td>
+        <td><span class="location-badge">{{capture.location}}</span></td>
+        <td>{{capture.capture_utc}}</td>
+        <td><code style="font-size:10px">{{capture.price_sha256[:16]}}...</code></td>
+        <td><code style="font-size:10px">{{capture.payment_sha256[:16]}}...</code></td>
+        <td><a href="/view/{{capture.id}}" class="view-btn">View PDF</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    No captures found
+    {% if location_filter or stock_filter %}
+    <br><br><a href="/history" style="color:#2563eb">Clear filters</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</body>
+</html>
+    """, captures=captures, location_filter=location_filter, stock_filter=stock_filter, sort_by=sort_by)
+    return Response(html, mimetype="text/html")
+
+@app.get("/view/<int:capture_id>")
+def view_capture(capture_id):
+    with get_db() as conn:
+        capture = conn.execute("SELECT * FROM captures WHERE id = ?", (capture_id,)).fetchone()
+    
+    if not capture:
+        return Response("Capture not found", status=404)
+    
+    if capture['pdf_path'] and os.path.exists(capture['pdf_path']):
+        return send_file(capture['pdf_path'], mimetype="application/pdf", as_attachment=True,
+                        download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf")
+    
+    price_path = capture['price_screenshot_path']
+    pay_path = capture['payment_screenshot_path']
+    
+    if (price_path and os.path.exists(price_path)) or (pay_path and os.path.exists(pay_path)):
+        print(f"📄 Regenerating PDF for capture {capture_id}")
+        
+        rfc_price = None
+        rfc_pay = None
+        if capture['price_tsa']:
+            rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None}
+        if capture['payment_tsa']:
+            rfc_pay = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None}
+        
+        try:
+            pdf_path = generate_pdf(
+                stock=capture['stock'],
+                location=capture['location'],
+                zip_code=capture['zip_code'],
+                url=capture['url'], # This is fine, it will be the captured URL
+                utc_time=capture['capture_utc'],
+                https_date=capture['https_date'],
+                price_path=price_path if os.path.exists(price_path or "") else None,
+                pay_path=pay_path if os.path.exists(pay_path or "") else None,
+                sha_price=capture['price_sha256'],
+                sha_pay=capture['payment_sha256'],
+                rfc_price=rfc_price,
+                rfc_pay=rfc_pay,
+                debug_info=capture['debug_info']
+            )
+            
+            if pdf_path and os.path.exists(pdf_path):
+                return send_file(pdf_path, mimetype="application/pdf", as_attachment=True,
+                               download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf")
+        except Exception as e:
+            print(f"❌ PDF regeneration failed: {e}")
+            traceback.print_exc()
+    
+    return Response("PDF and screenshots no longer available. Data has been cleaned up.", status=404)
+
+@app.post("/capture")
+def capture():
+    try:
+        stock = (request.form.get("stock") or "").strip()
+        location = (request.form.get("location") or "portland").strip().lower()
+        
+        if not re.match(r"^[a-zA-Z0-9]+$", stock):
+            return Response("Invalid stock number. Please use letters and numbers only.", status=400)
+        
+        if location not in CW_LOCATIONS:
+            return Response("Invalid location", status=400)
+        
+        loc_info = CW_LOCATIONS[location]
+        zip_code = loc_info["zip"]
+        location_name = loc_info["name"]
+        latitude = loc_info["lat"]
+        longitude = loc_info["lon"]
+
+        # --- MODIFIED: Capture final_url ---
+        price_path, pay_path, final_url, debug_info = do_capture(stock, zip_code, location_name, latitude, longitude)
+        # --- END MODIFICATION ---
+
+        utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        hdate = https_date()
+
+        price_ok = bool(price_path and os.path.exists(price_path))
+        pay_ok   = bool(pay_path   and os.path.exists(pay_path))
+
+        sha_price = sha256_file(price_path) if price_ok else "N/A"
+        sha_pay   = sha256_file(pay_path)   if pay_ok   else "N/A"
+
+        rfc_price = None
+        rfc_pay = None
+        try:
+            rfc_price = get_rfc3161_timestamp(price_path) if price_ok else None
+        except Exception as e:
+            print(f"⚠ RFC 3161 timestamp failed for price: {e}")
+        
+        try:
+            rfc_pay = get_rfc3161_timestamp(pay_path) if pay_ok else None
+        except Exception as e:
+            print(f"⚠ RFC 3161 timestamp failed for payment: {e}")
+
+        pdf_path = None
+        if price_ok or pay_ok:
+            try:
+                pdf_path = generate_pdf(
+                    stock=stock,
+                    location=location_name,
+                    zip_code=zip_code,
+                    url=final_url, # --- MODIFIED: Pass final_url to PDF ---
+                    utc_time=utc_now,
+                    https_date=hdate,
+                    price_path=price_path if price_ok else None,
+                    pay_path=pay_path if pay_ok else None,
+                    sha_price=sha_price,
+                    sha_pay=sha_pay,
+                    rfc_price=rfc_price,
+                    rfc_pay=rfc_pay,
+                    debug_info=debug_info
+                )
+            except Exception as e:
+                print(f"❌ PDF generation error: {e}")
+                traceback.print_exc()
+                pdf_path = None
+
+        capture_id = None
+        try:
+            with get_db() as conn:
+                cursor = conn.execute("""
+                    INSERT INTO captures (
+                        stock, location, zip_code, url, capture_utc, https_date,
+                        price_sha256, payment_sha256, price_screenshot_path, payment_screenshot_path,
+                        price_tsa, price_timestamp, payment_tsa, payment_timestamp,
+                        pdf_path, debug_info
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    stock, location_name, zip_code, final_url, utc_now, hdate, # --- MODIFIED: Save final_url to DB ---
+                    sha_price, sha_pay, price_path, pay_path,
+                    rfc_price['tsa'] if rfc_price else None,
+                    rfc_price['timestamp'] if rfc_price else None,
+                    rfc_pay['tsa'] if rfc_pay else None,
+                    rfc_pay['timestamp'] if rfc_pay else None,
+                    pdf_path, debug_info
+                ))
+                capture_id = cursor.lastrowid
+                print(f"✓ Saved to database with ID: {capture_id}")
+        except Exception as e:
+            print(f"⚠ Database save failed: {e}")
+            traceback.print_exc()
+
+        if pdf_path and os.path.exists(pdf_path):
+            return send_file(pdf_path, mimetype="application/pdf", as_attachment=True,
+                           download_name=f"CW_Capture_{stock}_{capture_id or 'temp'}.pdf")
+        else:
+            error_html = f"""
+<!doctype html>
+<html>
+<head><title>PDF Generation Failed</title>
+<style>body{{font-family:sans-serif;padding:40px;background:#f3f4f6}}
+.error{{background:#fff;padding:20px;border-radius:8px;max-width:800px;margin:0 auto}}
+h1{{color:#dc2626}}pre{{background:#f9fafb;padding:12px;border-radius:4px;overflow:auto}}
+a{{color:#2563eb}}</style>
+</head>
+<body>
+<div class="error">
+<h1>PDF Generation Failed</h1>
+<p>Screenshots may not have been captured, or PDF generation failed.</p>
+<p><strong>Stock:</strong> {stock} | <strong>Location:</strong> {location_name}</p>
+<p><strong>Price OK:</strong> {price_ok} | <strong>Payment OK:</strong> {pay_ok}</p>
+<h3>Debug Information:</h3>
+<pre>{debug_info}</pre>
+<p><a href="/">← Back to Home</a></p>
+</div>
+</body>
+</html>
+            """
+            return Response(error_html, mimetype="text/html", status=500)
+
+    except Exception as e:
+        print("❌ /capture failed:", e, file=sys.stderr)
+        traceback.print_exc()
+        return Response(f"Error: {e}", status=500)
+
+# -------------------- Helpers --------------------
+
+def generate_pdf(stock, location, zip_code, url, utc_time, https_date, 
+                 price_path, pay_path, sha_price, sha_pay, 
+                 rfc_price, rfc_pay, debug_info):
+    """Generate PDF report with screenshots side by side"""
+    try:
+        if price_path:
+            tmpdir = os.path.dirname(price_path)
+        elif pay_path:
+            tmpdir = os.path.dirname(pay_path)
+        else:
+            # This case handles if a "Not Found" capture failed to get a screenshot
+            # or if some other unknown error occurred.
+            tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+        
+        pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
+        print(f"📄 Generating PDF at: {pdf_path}")
+        
+        doc = SimpleDocTemplate(pdf_path, pagesize=letter,
+                               leftMargin=0.5*inch, rightMargin=0.5*inch,
+                               topMargin=0.5*inch, bottomMargin=0.5*inch)
+        
+        story = []
+        styles = getSampleStyleSheet()
+        
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            textColor=colors.HexColor('#003087'),
+            spaceAfter=12,
+            alignment=TA_CENTER
+        )
+        
+        not_found_style = ParagraphStyle(
+            'NotFound',
+            parent=styles['Normal'],
+            fontSize=11,
+            textColor=colors.HexColor('#991b1b'), # dark red
+            borderColor=colors.HexColor('#f87171'), # red
+            borderWidth=1,
+            borderPadding=12,
+            borderRadius=8,
+            backgroundColor=colors.HexColor('#fef2f2'), # light red
+            spaceAfter=16,
+            alignment=TA_CENTER,
+            leading=14
+        )
+        
+        story.append(Paragraph("Camping World Compliance Capture Report", title_style))
+        story.append(Spacer(1, 0.2*inch))
+        
+        meta_data = [
+            ['Stock Number:', stock],
+            ['Location:', f"{location} (ZIP: {zip_code})"],
+            ['URL:', url], # This now reflects the *final* captured URL
+            ['Capture Time (UTC):', utc_time],
+            ['HTTPS Date:', https_date or 'N/A'],
+        ]
+        
+        meta_table = Table(meta_data, colWidths=[2*inch, 5*inch])
+        meta_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f3f4f6')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(meta_table)
+        story.append(Spacer(1, 0.2*inch))
+        
+        is_not_found = "NOT_FOUND_CAPTURE=TRUE" in (debug_info or "")
+        
+        if is_not_found:
+            story.append(Paragraph(
+                "<b>Stock Number Not Found Online</b><br/><br/>"
+                "The current stock number is not being advertised online or the page was not found at the time of capture. "
+                "This report serves as a record that no online pricing was available to a customer.",
+                not_found_style
+            ))
+        
+        if rfc_price or rfc_pay:
+            story.append(Paragraph("Cryptographic Timestamps (RFC 3161)", styles['Heading2']))
+            ts_data = []
+            if rfc_price:
+                # --- MODIFIED: Change label if it's a "Not Found" screenshot ---
+                label = "'Not Found' Screenshot:" if is_not_found else "Price Disclosure:"
+                ts_data.append([label, f"{rfc_price['timestamp']} | TSA: {rfc_price['tsa']}"])
+            if rfc_pay:
+                ts_data.append(['Payment Disclosure:', f"{rfc_pay['timestamp']} | TSA: {rfc_pay['tsa']}"])
+            
+            ts_table = Table(ts_data, colWidths=[2*inch, 5*inch])
+            ts_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#ecfdf5')),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#10b981')),
+            ]))
+            story.append(ts_table)
+            story.append(Spacer(1, 0.2*inch))
+        
+        story.append(Paragraph("Captured Disclosures", styles['Heading2']))
+        story.append(Spacer(1, 0.1*inch))
+        
+        # Price Disclosure (Top)
+        if price_path and os.path.exists(price_path):
+            try:
+                if is_not_found:
+                    story.append(Paragraph("<b>'Not Found' Page Screenshot</b>", styles['Normal']))
+                else:
+                    story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+                
+                story.append(Spacer(1, 0.05*inch))
+                
+                img = PILImage.open(price_path)
+                # Full width for better readability
+                img_width = 7*inch
+                aspect = img.height / img.width
+                target_height = img_width * aspect
+                
+                # Limit height to fit on page
+                if target_height > 3.5*inch:
+                    target_height = 3.5*inch
+                    img_width = target_height / aspect
+                
+                img_obj = Image(price_path, width=img_width, height=target_height)
+                
+                # Center the image
+                img_table = Table([[img_obj]], colWidths=[7*inch])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                ]))
+                story.append(img_table)
+                story.append(Spacer(1, 0.15*inch))
+            except Exception as e:
+                print(f"⚠ Error processing price image: {e}")
+                story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
+                story.append(Spacer(1, 0.15*inch))
+        
+        elif not is_not_found: # Only show this if it's NOT a "not found" capture
+            story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+            story.append(Spacer(1, 0.05*inch))
+            story.append(Paragraph("Price disclosure not available", styles['Normal']))
+            story.append(Spacer(1, 0.15*inch))
+        
+        # Payment Disclosure (Bottom)
+        if pay_path and os.path.exists(pay_path):
+            try:
+                story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+                story.append(Spacer(1, 0.05*inch))
+                
+                img = PILImage.open(pay_path)
+                img_width = 7*inch
+                aspect = img.height / img.width
+                target_height = img_width * aspect
+                
+                if target_height > 3.5*inch:
+                    target_height = 3.5*inch
+                    img_width = target_height / aspect
+                
+                img_obj = Image(pay_path, width=img_width, height=target_height)
+                
+                img_table = Table([[img_obj]], colWidths=[7*inch])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                ]))
+                story.append(img_table)
+                story.append(Spacer(1, 0.15*inch))
+            except Exception as e:
+                print(f"⚠ Error processing payment image: {e}")
+                story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
+                story.append(Spacer(1, 0.15*inch))
+        
+        elif not is_not_found: # Only show this if it's NOT a "not found" capture
+            story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+            story.append(Spacer(1, 0.05*inch))
+            story.append(Paragraph("Payment disclosure not available", styles['Normal']))
+            story.append(Spacer(1, 0.15*inch))
+        
+        story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
+        
+        hash_data = []
+        if is_not_found:
+            hash_data.append(["'Not Found' Screenshot:", sha_price])
+        else:
+            if sha_price != "N/A":
+                hash_data.append(['Price Disclosure:', sha_price])
+            if sha_pay != "N/A":
+                hash_data.append(['Payment Disclosure:', sha_pay])
+        
+        hash_table = Table(hash_data, colWidths=[2*inch, 5*inch])
+        hash_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 0), (1, -1), 'Courier'),
+            ('FONTSIZE', (0, 0), (-1, -1), 7),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        story.append(hash_table)
+        
+        doc.build(story)
+        print(f"✓ PDF generated successfully: {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
+        return pdf_path
+        
+    except Exception as e:
+        print(f"❌ PDF generation failed: {e}")
+        traceback.print_exc()
+        return None
+
+def sha256_file(path):
+    if not path or not os.path.exists(path): return "N/A"
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024*1024), b""): h.update(chunk)
+    return h.hexdigest()
+
+def https_date():
+    try:
+        r = requests.head("https://cloudflare.com", timeout=8)
+        return r.headers.get("Date")
+    except Exception:
+        return None
+
+def get_rfc3161_timestamp(file_path):
+    """Get RFC 3161 timestamp for a file from a public TSA."""
+    if not file_path or not os.path.exists(file_path):
+        return None
+    
+    print(f"🕐 Getting RFC 3161 timestamp for {os.path.basename(file_path)}...")
+    
+    file_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024*1024), b""):
+            file_hash.update(chunk)
+    digest = file_hash.digest()
+    
+    for tsa_url in TSA_URLS:
+        try:
+            print(f"  Trying TSA: {tsa_url}")
+            rt = RemoteTimestamper(tsa_url, hashname='sha256')
+            tsr = rt.timestamp(data=digest)
+            
+            if tsr:
+                from rfc3161ng import decode_timestamp_response
+                ts_info = decode_timestamp_response(tsr)
+                timestamp_dt = ts_info.gen_time
+                timestamp_str = timestamp_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+                
+                token_path = file_path + ".tsr"
+                with open(token_path, "wb") as tf:
+                    tf.write(tsr)
+                
+                print(f"  ✓ Timestamp obtained: {timestamp_str}")
+                
+                return {
+                    "timestamp": timestamp_str,
+                    "tsa": tsa_url,
+                    "cert_info": f"Token saved: {os.path.basename(token_path)}",
+                    "token_file": token_path
+                }
+        except Exception as e:
+            print(f"  ✗ TSA {tsa_url} failed: {e}")
+            continue
+    
+    print(f"  ✗ All TSAs failed for {os.path.basename(file_path)}")
+    return None
+
+def find_and_trigger_tooltip(page, label_text, tooltip_name):
+    """Enhanced tooltip triggering with multiple fallback strategies."""
+    debug = []
+    debug.append(f"Attempting to trigger {tooltip_name} tooltip for label: '{label_text}'")
+    
+    try:
+        page.wait_for_timeout(1500)
+        
+        all_labels = page.locator(f"text={label_text}").all()
+        debug.append(f"Found {len(all_labels)} instances of '{label_text}'")
+        
+        if len(all_labels) == 0:
+            debug.append(f"❌ No instances found - element may not exist on page")
+            return False, "\n".join(debug)
+        
+        success = False
+        for idx, label in enumerate(all_labels):
+            try:
+                is_visible = label.is_visible(timeout=1000)
+                if not is_visible:
+                    debug.append(f"  Instance {idx}: not visible, skipping")
+                    continue
+                
+                debug.append(f"  Instance {idx}: visible, attempting trigger")
+                
+                label.scroll_into_view_if_needed(timeout=3000)
+                page.wait_for_timeout(800)
+                
+                icon_found = False
+                
+                try:
+                    parent = label.locator("xpath=..").first
+                    svg_icons = parent.locator("svg.MuiSvgIcon-root").all()
+                    
+                    debug.append(f"    Found {len(svg_icons)} SVG icons in parent")
+                    
+                    for svg_idx, svg_icon in enumerate(svg_icons):
+                        try:
+                            if svg_icon.is_visible(timeout=500):
+                                debug.append(f"    Attempting to click SVG icon {svg_idx}...")
+                                svg_icon.click(timeout=2000, force=True)
+                                page.wait_for_timeout(1000)
+                                icon_found = True
+                                debug.append(f"    ✓ Clicked SVG icon {svg_idx}")
+                                break
+                        except Exception as e:
+                            debug.append(f"    SVG {svg_idx} click failed: {str(e)[:100]}")
+                            continue
+                            
+                except Exception as e:
+                    debug.append(f"    Parent SVG search failed: {str(e)[:100]}")
+                
+                if not icon_found:
+                    try:
+                        debug.append(f"    Trying data-testid selectors...")
+                        info_selectors = [
+                            '[data-testid*="info"]',
+                            '[data-testid*="Info"]',
+                            'svg[data-testid]',
+                        ]
+                        
+                        for selector in info_selectors:
+                            nearby_icons = page.locator(selector).all()
+                            if len(nearby_icons) > 0:
+                                debug.append(f"    Found {len(nearby_icons)} with {selector}")
+                                for icon in nearby_icons:
+                                    try:
+                                        if icon.is_visible(timeout=500):
+                                            icon.click(timeout=2000, force=True)
+                                            page.wait_for_timeout(1000)
+                                            icon_found = True
+                                            debug.append(f"    ✓ Clicked icon via {selector}")
+                                            break
+                                    except:
+                                        continue
+                            if icon_found:
+                                break
+                    except Exception as e:
+                        debug.append(f"    data-testid search failed: {str(e)[:100]}")
+                
+                if not icon_found:
+                    debug.append(f"    No icon found, hovering label as fallback...")
+                    try:
+                        label.hover(timeout=2000, force=True)
+                        page.wait_for_timeout(1200)
+                        debug.append(f"    ✓ Hovered label")
+                    except Exception as e:
+                        debug.append(f"    Hover failed: {str(e)[:100]}")
+                
+                page.wait_for_timeout(1500)
+                
+                tooltip_selectors = [
+                    "[role='tooltip']",
+                    ".MuiTooltip-popper",
+                    ".MuiTooltip-tooltip",
+                    ".MuiPopper-root",
+                ]
+                
+                tooltip_found = False
+                for selector in tooltip_selectors:
+                    try:
+                        tooltips = page.locator(selector).all()
+                        for tooltip in tooltips:
+                            if tooltip.is_visible(timeout=1000):
+                                debug.append(f"    ✓ Tooltip visible with: {selector}")
+                                page.wait_for_timeout(1000)
+                                tooltip_found = True
+                                success = True
+                                break
+                        if tooltip_found:
+                            break
+                    except:
+                        continue
+                
+                if success:
+                    debug.append(f"  ✓ Successfully triggered tooltip from instance {idx}")
+                    break
+                else:
+                    debug.append(f"    ⚠ No tooltip appeared for instance {idx}")
+                    
+            except Exception as e:
+                debug.append(f"  Instance {idx} failed: {str(e)[:150]}")
+                continue
+        
+        if not success:
+            debug.append("⚠ All standard methods failed, trying JavaScript injection...")
+            try:
+                result = page.evaluate(f"""
+                    () => {{
+                        const labels = Array.from(document.querySelectorAll('*'))
+                            .filter(el => el.textContent.trim() === '{label_text}');
+                        
+                        console.log('JS: Found', labels.length, 'label elements');
+                        
+                        for (const label of labels) {{
+                            const parent = label.parentElement;
+                            if (!parent) continue;
+                            
+                            const svg = parent.querySelector('svg');
+                            if (svg) {{
+                                console.log('JS: Found SVG, triggering events');
+                                svg.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+                                
+                                setTimeout(() => {{
+                                    ['mouseenter', 'mouseover', 'mousemove', 'click'].forEach(eventType => {{
+                                        svg.dispatchEvent(new MouseEvent(eventType, {{
+                                            bubbles: true,
+                                            cancelable: true,
+                                            view: window
+                                        }}));
+                                    }});
+                                }}, 500);
+                                
+                                return true;
+                            }}
+                        }}
+                        return false;
+                    }}
+                """)
+                
+                if result:
+                    page.wait_for_timeout(2000)
+                    debug.append("✓ JavaScript fallback executed - events dispatched")
+                    
+                    for selector in tooltip_selectors:
+                        try:
+                            if page.locator(selector).first.is_visible(timeout=2000):
+                                debug.append(f"✓ Tooltip appeared after JS fallback: {selector}")
+                                success = True
+                                break
+                        except:
+                            continue
+                else:
+                    debug.append("⚠ JavaScript fallback: no SVG elements found")
+                    
+            except Exception as e:
+                debug.append(f"JavaScript fallback error: {str(e)[:150]}")
+        
+        return success, "\n".join(debug)
+        
+    except Exception as e:
+        debug.append(f"❌ Critical Error: {str(e)}")
+        traceback.print_exc()
+        return False, "\n".join(debug)
+
+def do_capture(stock, zip_code, location_name, latitude, longitude):
+    # --- MODIFIED: Store requested URL ---
+    requested_url = f"https://rv.campingworld.com/rv/{stock}"
+    
+    if STORAGE_MODE == "persistent" and PERSISTENT_STORAGE_PATH:
+        os.makedirs(PERSISTENT_STORAGE_PATH, exist_ok=True)
+        tmpdir = os.path.join(PERSISTENT_STORAGE_PATH, f"cw-{stock}-{int(time.time())}")
+        os.makedirs(tmpdir, exist_ok=True)
+    else:
+        tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+    
+    price_png = os.path.join(tmpdir, f"cw_{stock}_price.png")
+    pay_png   = os.path.join(tmpdir, f"cw_{stock}_payment.png")
+    
+    all_debug = []
+    all_debug.append(f"Starting capture for stock: {stock}")
+    all_debug.append(f"Requested URL: {requested_url}")
+    all_debug.append(f"Location: {location_name} (ZIP: {zip_code})")
+    all_debug.append(f"Coordinates: {latitude}, {longitude}")
+
+    # --- MODIFIED: Identify if unit is used (contains letters) ---
+    is_used = bool(re.search(r"[a-zA-Z]", stock))
+    all_debug.append(f"Unit type: {'Used' if is_used else 'New'}")
+    # --- END MODIFICATION ---
+
+    print(f"🚀 Starting capture: {requested_url} (ZIP: {zip_code}, Location: {location_name})")
+    
+    final_url = requested_url # Default in case of error
+    
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled"
+                ],
+            )
+            
+            context = browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+                locale="en-US",
+                geolocation={"latitude": latitude, "longitude": longitude},
+                permissions=["geolocation"]
+            )
+            
+            all_debug.append(f"✓ Browser context created with geolocation: {latitude}, {longitude}")
+            
+            page = context.new_page()
+            
+            all_debug.append("Navigating to page...")
+            page.goto(requested_url, wait_until="domcontentloaded", timeout=60_000)
+            
+            try:
+                page.wait_for_load_state("networkidle", timeout=30_000)
+                all_debug.append("✓ Network idle reached")
+            except:
+                all_debug.append("⚠ Network idle timeout (continuing anyway)")
+            
+            try:
+                page.evaluate(f"""
+                    localStorage.setItem('cw_zip', '{zip_code}');
+                    document.cookie = 'cw_zip={zip_code};path=/;SameSite=Lax';
+                """)
+                all_debug.append(f"✓ Injected ZIP: {zip_code}")
+                page.reload(wait_until="load", timeout=30_000)
+                page.wait_for_timeout(2000)
+                all_debug.append("✓ Reloaded page with ZIP")
+            except Exception as e:
+                all_debug.append(f"⚠ ZIP injection issue: {e}")
+
+            # --- MODIFIED: Get final URL after all navigation/reloads ---
+            final_url = page.url
+            all_debug.append(f"✓ Final URL captured: {final_url}")
+            # --- END MODIFICATION ---
+            
+            page.add_style_tag(content="""
+                [id*="intercom"], [class*="livechat"], [class*="chat"],
+                .cf-overlay, .cf-powered-by, .cf-cta,
+                .MuiBackdrop-root, [role="dialog"]:not([role="tooltip"]) {
+                    display: none !important;
+                    visibility: hidden !important;
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                }
+            """)
+            all_debug.append("✓ Overlay-hiding CSS injected")
+            
+            page.wait_for_timeout(2000)
+            
+            try:
+                page.evaluate("""
+                    window.scrollTo({
+                        top: document.body.scrollHeight * 0.3,
+                        behavior: 'smooth'
+                    });
+                """)
+                page.wait_for_timeout(1000)
+                all_debug.append("✓ Scrolled to pricing section")
+            except Exception as e:
+                all_debug.append(f"⚠ Scroll failed: {e}")
+
+            # --- MODIFIED: Initialize paths as None ---
+            price_png_path = None
+            pay_png_path = None
+            # --- END MODIFICATION ---
+
+            # --- MODIFIED: Only run "Total Price" capture for NEW units ---
+            if not is_used:
+                all_debug.append("\n--- Capturing Price Tooltip (New Unit) ---")
+                success, debug_info = find_and_trigger_tooltip(page, "Total Price", "price")
+                all_debug.append(debug_info)
+                
+                if success:
+                    try:
+                        page.screenshot(path=price_png, full_page=True)
+                        size = os.path.getsize(price_png)
+                        all_debug.append(f"✓ Price screenshot saved: {size} bytes")
+                        print(f"✓ Price screenshot: {size} bytes")
+                        price_png_path = price_png # Set path on success
+                    except Exception as e:
+                        all_debug.append(f"❌ Price screenshot failed: {e}")
+            else:
+                all_debug.append("\n--- Skipping Price Tooltip (Used Unit) ---")
+            # --- END MODIFICATION ---
+            
+            page.wait_for_timeout(1000)
+            
+            all_debug.append("\n--- Capturing Payment Tooltip ---")
+            success, debug_info = find_and_trigger_tooltip(page, "Est. Payment", "payment")
+            all_debug.append(debug_info)
+            
+            if success:
+                try:
+                    page.screenshot(path=pay_png, full_page=True)
+                    size = os.path.getsize(pay_png)
+                    all_debug.append(f"✓ Payment screenshot saved: {size} bytes")
+                    print(f"✓ Payment screenshot: {size} bytes")
+                    pay_png_path = pay_png # Set path on success
+                except Exception as e:
+                    all_debug.append(f"❌ Payment screenshot failed: {e}")
+
+            # --- MODIFIED: Updated "Not Found" Logic ---
+            not_found = False
+            # Check for failure:
+            # 1. If it's USED and payment capture FAILED
+            # 2. If it's NEW and BOTH price and payment captures FAILED
+            if (is_used and pay_png_path is None) or \
+               (not is_used and price_png_path is None and pay_png_path is None):
+                
+                all_debug.append("\n--- Checking for 'No Matches Found' (Capture Failed) ---")
+                try:
+                    not_found_locator = page.locator(
+                        "h1:text-matches('Page Not Found', 'i'), "
+                        "h2:text-matches('No Matches Found', 'i'), "
+                        ":text-matches('Listings Not Found', 'i'), "
+                        ":text-matches('This listing is currently unavailable', 'i')"
+                    ).first
+                    
+                    if not_found_locator.is_visible(timeout=3000):
+                        not_found_text = not_found_locator.text_content()
+                        all_debug.append(f"✓ Found 'Not Found' text: {not_found_text.strip()}")
+                        
+                        # Re-purpose price_png for the "not found" screenshot
+                        not_found_png = os.path.join(tmpdir, f"cw_{stock}_not_found.png")
+                        page.screenshot(path=not_found_png, full_page=True)
+                        size = os.path.getsize(not_found_png)
+                        
+                        all_debug.append(f"✓ 'Not Found' screenshot saved: {size} bytes")
+                        price_png_path = not_found_png # Set price_png_path to the not_found screenshot
+                        not_found = True # Set flag
+                    else:
+                        all_debug.append("⚠ No 'Not Found' text detected.")
+                except Exception as e:
+                    all_debug.append(f"⚠ Error checking for 'Not Found' text: {e}")
+            
+            if not_found:
+                all_debug.append("NOT_FOUND_CAPTURE=TRUE")
+            # --- END MODIFICATION ---
+            
+            browser.close()
+            all_debug.append("\n✓ Browser closed")
+    
+    except Exception as e:
+        all_debug.append(f"\n❌ CRITICAL ERROR: {str(e)}")
+        all_debug.append(traceback.format_exc())
+        print(f"❌ Critical error in do_capture: {e}")
+        traceback.print_exc()
+    
+    debug_output = "\n".join(all_debug)
+    # --- MODIFIED: Return final_url ---
+    return price_png_path, pay_png_path, final_url, debug_output
+
 # -------------------- Entrypoint --------------------
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT, debug=True)
+    app.run(host="0.0.0.0", port=PORT, debug=False)
