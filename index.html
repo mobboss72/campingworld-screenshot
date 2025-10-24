@@ -5,7 +5,6 @@
   <title>CW Compliance Capture Tool</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   
-  <!-- Prevent search engine indexing -->
   <meta name="robots" content="noindex, nofollow">
   <meta name="googlebot" content="noindex, nofollow">
   
@@ -500,6 +499,7 @@
         gap: 16px;
       }
 
+
       .step-number {
         width: 50px;
         height: 50px;
@@ -698,7 +698,7 @@
 
           <div class="form-group">
             <label for="stock">Stock Number</label>
-            <input type="text" name="stock" id="stock" placeholder="2319928" required pattern="[0-9]+" title="Please enter numbers only">
+            <input type="text" name="stock" id="stock" placeholder="2607628P" required pattern="[a-zA-Z0-9]+" title="Please enter a stock number (e.g., 2607628P)">
           </div>
           
           <button type="submit" id="submitBtn">Run Capture</button>
