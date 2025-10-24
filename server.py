@@ -1,23 +1,14 @@
 # server.py
-import os
-import sys
-import hashlib
-import datetime
-import tempfile
-import traceback
-import requests
-
+import os, sys, hashlib, datetime, tempfile, traceback, requests
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file
 from playwright.sync_api import sync_playwright
 
-# Persist Playwright browsers on disk
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
-
 PORT = int(os.getenv("PORT", "8080"))
 OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
 
-screenshot_cache = {}
 app = Flask(__name__, static_folder=None)
+screenshot_cache = {}
 
 @app.get("/")
 def root():
@@ -32,302 +23,118 @@ def serve_shot(sid):
 
 @app.post("/capture")
 def capture():
-    try:
-        stock = (request.form.get("stock") or "").strip()
-        if not stock.isdigit():
-            return Response("Invalid stock number", status=400)
+    stock = (request.form.get("stock") or "").strip()
+    if not stock.isdigit():
+        return Response("Invalid stock number", status=400)
 
-        price_png, pay_png, url = do_capture(stock)
+    price_png, pay_png, url = do_capture(stock)
+    utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    https_date = get_https_date()
 
-        utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        https_hdr_date = https_date()
+    def sha(path): return sha256_file(path) if os.path.exists(path) else "N/A"
+    pid, qid = f"price_{stock}_{int(datetime.datetime.utcnow().timestamp())}", f"payment_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
+    if os.path.exists(price_png): screenshot_cache[pid] = price_png
+    if os.path.exists(pay_png): screenshot_cache[qid] = pay_png
 
-        price_ok = os.path.exists(price_png)
-        pay_ok = os.path.exists(pay_png)
-
-        sha_price = sha256_file(price_png) if price_ok else "N/A"
-        sha_payment = sha256_file(pay_png) if pay_ok else "N/A"
-
-        price_id = f"price_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
-        pay_id = f"payment_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
-        if price_ok: screenshot_cache[price_id] = price_png
-        if pay_ok: screenshot_cache[pay_id] = pay_png
-
-        html = render_template_string("""
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Camping World Compliance Capture</title>
-<style>
-  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f5f5f7;margin:24px;}
-  h1{margin:0 0 14px;}
-  .hdr{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px 16px;margin-bottom:18px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-  .card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px 16px}
-  .card h2{margin:0 0 10px}
-  .frame{border:1px solid #e5e5e5;background:#fafafa;min-height:260px;padding:10px;border-radius:8px}
-  img{max-width:100%;height:auto;display:block;border:1px solid #ddd}
-  .ok{color:#137333;font-weight:600}
-  .err{color:#b00020;font-weight:600}
-  code{font-family:ui-monospace,Menlo,Consolas,monospace}
-  .kv{margin:2px 0}
-</style>
-</head>
-<body>
-  <h1>Camping World Compliance Capture</h1>
-  <div class="hdr">
-    <div class="kv"><strong>Stock:</strong> {{stock}}</div>
-    <div class="kv"><strong>URL:</strong> <a href="{{url}}" target="_blank">{{url}}</a></div>
-    <div class="kv"><strong>UTC:</strong> {{utc_now}}</div>
-    <div class="kv"><strong>HTTPS Date:</strong> {{https_hdr_date or 'unavailable'}}</div>
-  </div>
-
-  <div class="grid">
-    <div class="card">
-      <h2>Price Tooltip — Full Page</h2>
-      <div class="frame">
-        {% if price_ok %}
-          <img src="/screenshot/{{price_id}}" alt="Price tooltip">
-          <div class="ok">✔ Captured</div>
-        {% else %}
-          <div class="err">✗ Could not capture price tooltip.</div>
-        {% endif %}
-      </div>
-      <div class="kv"><strong>SHA-256:</strong> <code>{{sha_price}}</code></div>
-    </div>
-
-    <div class="card">
-      <h2>Payment Tooltip — Full Page</h2>
-      <div class="frame">
-        {% if pay_ok %}
-          <img src="/screenshot/{{pay_id}}" alt="Payment tooltip">
-          <div class="ok">✔ Captured</div>
-        {% else %}
-          <div class="err">✗ Could not capture payment tooltip.</div>
-        {% endif %}
-      </div>
-      <div class="kv"><strong>SHA-256:</strong> <code>{{sha_payment}}</code></div>
-    </div>
-  </div>
-</body>
-</html>
-        """, stock=stock, url=url, utc_now=utc_now, https_hdr_date=https_hdr_date,
-           price_ok=price_ok, pay_ok=pay_ok, price_id=price_id, pay_id=pay_id,
-           sha_price=sha_price, sha_payment=sha_payment)
-
-        return Response(html, mimetype="text/html")
-    except Exception as e:
-        print("❌ /capture failed:", e, file=sys.stderr)
-        traceback.print_exc()
-        return Response(f"Error: {e}", status=500)
+    html = f"""
+    <html><head><meta charset='utf-8'><title>Camping World Compliance Capture</title>
+    <style>
+      body{{font-family:sans-serif;background:#f4f4f4;margin:24px;}}
+      .grid{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
+      .card{{background:white;padding:15px;border:1px solid #ccc;border-radius:10px}}
+      img{{max-width:100%;border:1px solid #ccc}}
+      .ok{{color:green;font-weight:600}} .err{{color:red;font-weight:600}}
+    </style></head><body>
+      <h1>Camping World Compliance Capture</h1>
+      <p><b>Stock:</b> {stock}<br>
+      <b>URL:</b> <a href='{url}' target='_blank'>{url}</a><br>
+      <b>UTC:</b> {utc_now}<br>
+      <b>HTTPS Date:</b> {https_date or 'unavailable'}</p>
+      <div class='grid'>
+        <div class='card'>
+          <h3>Price Tooltip — Full Page</h3>
+          {"<img src='/screenshot/"+pid+"'><div class='ok'>✔ Captured</div>" if os.path.exists(price_png) else "<div class='err'>✗ Failed</div>"}
+          <p><b>SHA-256:</b> {sha(price_png)}</p>
+        </div>
+        <div class='card'>
+          <h3>Payment Tooltip — Full Page</h3>
+          {"<img src='/screenshot/"+qid+"'><div class='ok'>✔ Captured</div>" if os.path.exists(pay_png) else "<div class='err'>✗ Could not capture payment tooltip.</div>"}
+          <p><b>SHA-256:</b> {sha(pay_png)}</p>
+        </div>
+      </div></body></html>
+    """
+    return Response(html, mimetype="text/html")
 
 # ---------- helpers ----------
-
-def sha256_file(path: str) -> str:
-    if not os.path.exists(path):
-        return "N/A"
+def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            h.update(chunk)
+        for chunk in iter(lambda: f.read(8192), b""): h.update(chunk)
     return h.hexdigest()
 
-def https_date() -> str | None:
+def get_https_date():
     try:
         r = requests.head("https://cloudflare.com", timeout=8)
         return r.headers.get("Date")
-    except Exception:
-        return None
+    except: return None
 
-# ---------- core capture ----------
-
-def do_capture(stock: str) -> tuple[str, str, str]:
+# ---------- core ----------
+def do_capture(stock):
     url = f"https://rv.campingworld.com/rv/{stock}"
-    tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
-    price_png = os.path.join(tmpdir, f"cw_{stock}_price.png")
-    pay_png = os.path.join(tmpdir, f"cw_{stock}_payment.png")
+    tmp = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+    price_png = os.path.join(tmp, f"price_{stock}.png")
+    pay_png = os.path.join(tmp, f"payment_{stock}.png")
 
-    print(f"\n==> goto domcontentloaded: {url}")
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage"]
-        )
-        ctx = browser.new_context(
-            viewport={"width":1920,"height":1080},
-            geolocation={"latitude":45.5122,"longitude":-122.6587},
-            permissions=["geolocation"],
-            locale="en-US",
-            user_agent="Mozilla/5.0 Chrome"
-        )
-        page = ctx.new_page()
+        b = p.chromium.launch(headless=True, args=["--no-sandbox","--disable-dev-shm-usage"])
+        ctx = b.new_context(viewport={"width":1920,"height":1080}, locale="en-US")
+        pg = ctx.new_page()
+        pg.goto(url, wait_until="domcontentloaded")
+        try: pg.wait_for_load_state("networkidle", timeout=25000)
+        except: pass
 
-        page.goto(url, wait_until="domcontentloaded")
-        try:
-            page.wait_for_load_state("networkidle", timeout=30_000)
-            print("networkidle reached")
-        except Exception:
-            print("networkidle timeout (ignored)")
+        # ZIP + overlay hide
+        pg.evaluate("""(z)=>{localStorage.setItem('cw_zip',z);document.cookie='cw_zip='+z+';path=/';}""", OREGON_ZIP)
+        pg.add_style_tag(content="""
+          .convertflow-cta,.cf-overlay,[id^='cta'],[class*='chat'],.grecaptcha-badge{display:none!important;}
+        """)
 
-        # Force Oregon ZIP (best-effort)
+        # PRICE tooltip
         try:
-            page.evaluate("""(zip)=>{try{localStorage.setItem('cw_zip',zip)}catch(_){};document.cookie='cw_zip='+zip+';path=/;SameSite=Lax';}""", OREGON_ZIP)
-            print(f"ZIP injected {OREGON_ZIP}")
-            page.reload(wait_until="domcontentloaded")
-            try:
-                page.wait_for_load_state("networkidle", timeout=20_000)
-                print("post-zip networkidle reached")
-            except Exception as e:
-                print(f"ZIP injection/reload issue: {e}")
+            price_el = pg.locator(".MuiTypography-root.MuiTypography-subtitle1").first
+            price_el.scroll_into_view_if_needed()
+            icon = price_el.locator("xpath=following::*[contains(@class,'MuiSvgIcon-root')][1]")
+            trigger = icon.first if icon.count() > 0 else price_el
+            trigger.hover(force=True, timeout=8000)
+            pg.wait_for_selector("[role='tooltip'].MuiTooltip-popper", state="visible", timeout=6000)
+            pg.wait_for_timeout(300)
+            pg.screenshot(path=price_png, full_page=True)
         except Exception as e:
-            print(f"ZIP script error: {e}")
+            print("Price fail:", e)
 
-        # Hide overlays (chat, recaptcha, convertflow)
+        # PAYMENT tooltip
         try:
-            page.add_style_tag(content="""
-              [id*="drift-widget"], iframe[src*="drift"], #hubspot-messages-iframe-container,
-              [class*="intercom"], [id*="freshchat"], [data-testid="chat-widget"],
-              .grecaptcha-badge,
-              .convertflow-cta, .cf-overlay, [id^="cta"], [id*="cf-"] {
-                display:none !important; visibility:hidden !important; pointer-events:none !important;
-              }
-            """)
-            print("overlay-hiding CSS injected")
-        except Exception:
-            pass
-
-        # ----- PRICE (kept as your working variant) -----
-        try:
-            try:
-                page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", timeout=8_000)
-            except Exception:
-                print("price subtitle1 wait timeout (continue)")
-
-            cands = page.locator(".MuiTypography-root.MuiTypography-subtitle1")
-            cnt = cands.count()
-            print(f"price candidates={cnt}")
-
-            visible_price = None
-            for i in range(cnt):
-                e = cands.nth(i)
-                if e.is_visible():
-                    visible_price = e
-                    txt = (e.text_content() or "").strip()
-                    print(f"price use idx={i} text='{txt}'")
-                    break
-
-            if visible_price:
-                icon = visible_price.locator("xpath=following::*[name()='svg' and contains(@class,'MuiSvgIcon-root')][1]")
-                trigger = icon.first if icon.count() > 0 else visible_price
-                if icon.count() > 0:
-                    print("price: using adjacent info icon")
-                trigger.scroll_into_view_if_needed(timeout=5000)
-                trigger.hover(timeout=10_000, force=True)
-                page.wait_for_selector("[role='tooltip'].MuiTooltip-popper, .MuiTooltip-popper", state="visible", timeout=5_000)
-                print("price tooltip appeared")
-                page.wait_for_timeout(350)
-                page.screenshot(path=price_png, full_page=True)
-                print(f"price screenshot saved {price_png} size={os.path.getsize(price_png)} bytes")
-        except Exception as e:
-            print(f"ERROR price: {e}")
-
-        # ----- PAYMENT (right-rail container + nearest icon) -----
-        try:
-            # 1) Identify the right-rail container via its distinctive buttons/text.
-            container = page.evaluate_handle("""
-              () => {
-                function up(el){
-                  let n=el;
-                  for(let i=0;i<6 && n;i++){ // climb a few levels to wrap the right rail
-                    n = n.parentElement;
-                    if(!n) break;
-                    const w = n.getBoundingClientRect().width;
-                    if (w > 300 && w < 800) return n; // right-rail width band
-                  }
-                  return null;
-                }
-                const btn = document.querySelector('button:has(> span:matches-css(^Schedule Appointment$)), button:has(> span:matches-css(^Make an Offer$))');
-                const priceLabel = Array.from(document.querySelectorAll('*')).find(n => /Total Price/i.test(n.textContent||''));
-                return up(btn||priceLabel) || document.body;
-              }
-            """)
-            # 2) Anchor on "/mo" (or 'payment'/'month') within the container only.
-            anchor = page.evaluate_handle("""
-              (box) => {
-                const within = box || document;
-                const els = within.querySelectorAll('*');
-                for (const el of els) {
-                  const t = (el.textContent||'').trim();
-                  if (!t) continue;
-                  const s = t.toLowerCase();
-                  if (s.includes('/mo') || s.includes('payment') || s.includes('month')) {
-                    const r = el.getBoundingClientRect();
-                    if (r.width && r.height) return el;
+            pay_text = pg.locator("xpath=//*[contains(normalize-space(.), '/mo')]").first
+            pay_text.scroll_into_view_if_needed()
+            icon = pay_text.locator("xpath=following::*[name()='svg' and contains(@class,'MuiSvgIcon-root')][1]")
+            trigger = icon.first if icon.count() > 0 else pay_text
+            trigger.scroll_into_view_if_needed()
+            # Fire multiple synthetic events to guarantee hover
+            pg.evaluate("""
+                (el)=>{
+                  for(const t of ['pointerover','mouseover','mouseenter','mousemove','focus']){
+                    el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));
                   }
                 }
-                return null;
-              }
-            """, container)
-
-            if not anchor:
-                raise RuntimeError("payment: anchor not found in panel")
-
-            page.evaluate("(el)=>el.scrollIntoView({block:'center',inline:'center'})", anchor)
-            print("payment anchor scrolled into view")
-
-            # 3) Choose nearest info icon within the same container.
-            trigger = page.evaluate_handle("""
-              (box, anchor) => {
-                function center(r){ return {x:r.left + r.width/2, y:r.top + r.height/2}; }
-                const a = center(anchor.getBoundingClientRect());
-                const icons = Array.from(box.querySelectorAll('svg.MuiSvgIcon-root'));
-                let best=null, score=1e9;
-                for (const s of icons){
-                  const r = s.getBoundingClientRect();
-                  if (!r.width || !r.height) continue;
-                  const c = center(r);
-                  const d = Math.hypot(c.x-a.x, c.y-a.y);
-                  const band = Math.abs(c.y-a.y) * 0.25; // bias toward same horizontal band
-                  const sc = d + band;
-                  if (sc < score){ score=sc; best=s; }
-                }
-                return best || anchor;
-              }
-            """, container, anchor)
-
-            # 4) Open tooltip (hover → synthetic events → focus) and wait for it.
-            try:
-                trigger.hover(force=True, timeout=10_000)
-            except Exception:
-                pass
-            page.wait_for_timeout(120)
-            try:
-                page.evaluate("""(el) => {
-                  for (const type of ['pointerover','mouseover','mouseenter','pointermove']) {
-                    el.dispatchEvent(new MouseEvent(type, {bubbles:true,cancelable:true,view:window}));
-                  }
-                }""", trigger)
-            except Exception:
-                pass
-            try:
-                trigger.focus()
-            except Exception:
-                pass
-
-            page.wait_for_selector("[role='tooltip'].MuiTooltip-popper, .MuiTooltip-popper", state="visible", timeout=6_000)
-            print("payment tooltip appeared")
-            page.wait_for_timeout(350)
-            page.screenshot(path=pay_png, full_page=True)
-            print(f"payment screenshot saved {pay_png} size={os.path.getsize(pay_png)} bytes")
+            """, trigger)
+            pg.wait_for_selector("[role='tooltip'].MuiTooltip-popper, .base-Popper-root.MuiTooltip-popper",
+                                 state="visible", timeout=6000)
+            pg.wait_for_timeout(400)
+            pg.screenshot(path=pay_png, full_page=True)
         except Exception as e:
-            print(f"ERROR payment: {e}")
+            print("Payment fail:", e)
 
-        print(f"price file: {'exists' if os.path.exists(price_png) else 'missing'} ({os.path.getsize(price_png) if os.path.exists(price_png) else 'n/a'} bytes)")
-        print(f"payment file: {'exists' if os.path.exists(pay_png) else 'missing'} ({os.path.getsize(pay_png) if os.path.exists(pay_png) else 'n/a'})")
-
-        browser.close()
-
+        b.close()
     return price_png, pay_png, url
 
 if __name__ == "__main__":
