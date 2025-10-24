@@ -1,5 +1,5 @@
 # server.py
-import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io, re # <-- RE is already imported
+import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io, re 
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from rfc3161ng import RemoteTimestamper, get_hash_oid
@@ -7,7 +7,8 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, PageBreak
+# MODIFIED: Added KeepTogether to ensure new unit disclosures print on the same page
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, PageBreak, KeepTogether
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from PIL import Image as PILImage
 import sqlite3
@@ -521,6 +522,8 @@ def admin_dashboard():
               <td><strong>{{capture.stock}}</strong></td>
               <td><span class="location-badge">{{capture.location}}</span></td>
               <td>{{capture.capture_utc}}</td>
+              <td><code style="font-size:10px">{{capture.price_sha256[:16]}}...</code></td>
+              <td><code style="font-size:10px">{{capture.payment_sha256[:16]}}...</code></td>
               <td><a href="/view/{{capture.id}}" class="btn" style="padding: 6px 12px; font-size: 12px;">View PDF</a></td>
             </tr>
             {% endfor %}
@@ -865,7 +868,7 @@ def capture():
             print(f"⚠ RFC 3161 timestamp failed for payment: {e}")
 
         pdf_path = None
-        if price_ok or pay_ok:
+        if price_ok or pay_ok or "NOT_FOUND_CAPTURE=TRUE" in debug_info:
             try:
                 pdf_path = generate_pdf(
                     stock=stock,
@@ -950,7 +953,7 @@ a{{color:#2563eb}}</style>
 def generate_pdf(stock, location, zip_code, url, utc_time, https_date, 
                  price_path, pay_path, sha_price, sha_pay, 
                  rfc_price, rfc_pay, debug_info):
-    """Generate PDF report with screenshots side by side"""
+    """Generate PDF report with disclosures, using KeepTogether for new units."""
     try:
         if price_path:
             tmpdir = os.path.dirname(price_path)
@@ -1053,80 +1056,91 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         story.append(Paragraph("Captured Disclosures", styles['Heading2']))
         story.append(Spacer(1, 0.1*inch))
         
-        # Price Disclosure (Top)
-        if price_path and os.path.exists(price_path):
-            try:
-                if is_not_found:
-                    story.append(Paragraph("<b>'Not Found' Page Screenshot</b>", styles['Normal']))
+        # --- Helper function for image rendering to avoid repetition ---
+        def _render_image_block(path, title, max_height_inch, is_new_unit_mode=False):
+            elements = []
+            # Header
+            elements.append(Paragraph(f"<b>{title}</b>", styles['Normal']))
+            elements.append(Spacer(1, 0.05*inch))
+            
+            # Image
+            if path and os.path.exists(path):
+                try:
+                    img = PILImage.open(path)
+                    img_width = 7*inch
+                    aspect = img.height / img.width
+                    target_height = img_width * aspect
+                    
+                    # Limit height
+                    if target_height > max_height_inch * inch:
+                        target_height = max_height_inch * inch
+                        img_width = target_height / aspect
+                    
+                    img_obj = Image(path, width=img_width, height=target_height)
+                    
+                    # Center the image
+                    img_table = Table([[img_obj]], colWidths=[7*inch])
+                    img_table.setStyle(TableStyle([
+                        ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                    ]))
+                    elements.append(img_table)
+                    elements.append(Spacer(1, 0.15*inch))
+                except Exception as e:
+                    print(f"⚠ Error processing {title} image: {e}")
+                    elements.append(Paragraph(f"{title} available but could not render", styles['Normal']))
+                    elements.append(Spacer(1, 0.15*inch))
+            elif not is_not_found:
+                # Only show 'not captured' if it's not a 'Not Found' capture
+                
+                not_captured_note = ""
+                # Check for expected non-capture cases
+                is_used = bool(re.search(r"[a-zA-Z]", stock))
+                if is_used and title == "Price Disclosure":
+                    not_captured_note = " (Expected for Used Unit)"
+                elif is_new_unit_mode:
+                     not_captured_note = " (Capture failed, expected for New Unit)"
                 else:
-                    story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+                     not_captured_note = " (Capture failed)"
                 
-                story.append(Spacer(1, 0.05*inch))
-                
-                img = PILImage.open(price_path)
-                # Full width for better readability
-                img_width = 7*inch
-                aspect = img.height / img.width
-                target_height = img_width * aspect
-                
-                # Limit height to fit on page
-                if target_height > 3.5*inch:
-                    target_height = 3.5*inch
-                    img_width = target_height / aspect
-                
-                img_obj = Image(price_path, width=img_width, height=target_height)
-                
-                # Center the image
-                img_table = Table([[img_obj]], colWidths=[7*inch])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-                ]))
-                story.append(img_table)
-                story.append(Spacer(1, 0.15*inch))
-            except Exception as e:
-                print(f"⚠ Error processing price image: {e}")
-                story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
-                story.append(Spacer(1, 0.15*inch))
+                elements.append(Paragraph(f"{title.replace(':', '')} not captured{not_captured_note}", styles['Normal']))
+                elements.append(Spacer(1, 0.15*inch))
+            
+            return elements
+        # --- End Helper function ---
+
+        # Determine unit type
+        is_used = bool(re.search(r"[a-zA-Z]", stock))
         
-        elif not is_not_found: # Only show this if it's NOT a "not found" capture
-            story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
-            story.append(Spacer(1, 0.05*inch))
-            story.append(Paragraph("Price disclosure not available", styles['Normal']))
-            story.append(Spacer(1, 0.15*inch))
+        # --- Main Logic for Disclosures ---
         
-        # Payment Disclosure (Bottom)
-        if pay_path and os.path.exists(pay_path):
-            try:
-                story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
-                story.append(Spacer(1, 0.05*inch))
+        if is_not_found:
+            # Not Found: Print the single screenshot (price_path is the not_found_png)
+            if price_path and os.path.exists(price_path):
+                story.extend(_render_image_block(price_path, "'Not Found' Page Screenshot", 7.0))
                 
-                img = PILImage.open(pay_path)
-                img_width = 7*inch
-                aspect = img.height / img.width
-                target_height = img_width * aspect
+        elif not is_used:
+            # --- NEW UNIT: Price and Payment Disclosures on the same page (KeepTogether) ---
+            all_disclosures = []
+            
+            # Price Disclosure (Max height 4.0 inches each to ensure both fit)
+            all_disclosures.extend(_render_image_block(price_path, "Price Disclosure", 4.0, is_new_unit_mode=True))
+            
+            # Payment Disclosure
+            all_disclosures.extend(_render_image_block(pay_path, "Payment Disclosure", 4.0, is_new_unit_mode=True))
+            
+            if all_disclosures:
+                story.append(KeepTogether(all_disclosures))
                 
-                if target_height > 3.5*inch:
-                    target_height = 3.5*inch
-                    img_width = target_height / aspect
-                
-                img_obj = Image(pay_path, width=img_width, height=target_height)
-                
-                img_table = Table([[img_obj]], colWidths=[7*inch])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-                ]))
-                story.append(img_table)
-                story.append(Spacer(1, 0.15*inch))
-            except Exception as e:
-                print(f"⚠ Error processing payment image: {e}")
-                story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
-                story.append(Spacer(1, 0.15*inch))
-        
-        elif not is_not_found: # Only show this if it's NOT a "not found" capture
-            story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
-            story.append(Spacer(1, 0.05*inch))
-            story.append(Paragraph("Payment disclosure not available", styles['Normal']))
-            story.append(Spacer(1, 0.15*inch))
+        elif is_used:
+            # --- USED UNIT: Price (N/A) and Payment (Hover) printed sequentially ---
+            
+            # Price Disclosure (will print 'not captured' as price_path is None)
+            story.extend(_render_image_block(price_path, "Price Disclosure", 3.5))
+            
+            # Payment Disclosure
+            story.extend(_render_image_block(pay_path, "Payment Disclosure", 4.5))
+
+        # --- End Main Logic for Disclosures ---
         
         story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
         
@@ -1443,8 +1457,8 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
             
             context = browser.new_context(
                 viewport={"width": 1920, "height": 1080},
-                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/555.36 "
+                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/555.36"),
                 locale="en-US",
                 geolocation={"latitude": latitude, "longitude": longitude},
                 permissions=["geolocation"]
