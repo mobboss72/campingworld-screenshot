@@ -215,55 +215,98 @@ def capture():
         sha_price = sha256_file(price_path) if price_ok else "N/A"
         sha_pay   = sha256_file(pay_path)   if pay_ok   else "N/A"
 
-        # Get RFC 3161 timestamps
-        rfc_price = get_rfc3161_timestamp(price_path) if price_ok else None
-        rfc_pay = get_rfc3161_timestamp(pay_path) if pay_ok else None
+        # Get RFC 3161 timestamps (but don't fail if unavailable)
+        rfc_price = None
+        rfc_pay = None
+        try:
+            rfc_price = get_rfc3161_timestamp(price_path) if price_ok else None
+        except Exception as e:
+            print(f"⚠ RFC 3161 timestamp failed for price: {e}")
+        
+        try:
+            rfc_pay = get_rfc3161_timestamp(pay_path) if pay_ok else None
+        except Exception as e:
+            print(f"⚠ RFC 3161 timestamp failed for payment: {e}")
 
         # Generate PDF
         pdf_path = None
         if price_ok or pay_ok:
-            pdf_path = generate_pdf(
-                stock=stock,
-                location=location_name,
-                zip_code=zip_code,
-                url=url,
-                utc_time=utc_now,
-                https_date=hdate,
-                price_path=price_path if price_ok else None,
-                pay_path=pay_path if pay_ok else None,
-                sha_price=sha_price,
-                sha_pay=sha_pay,
-                rfc_price=rfc_price,
-                rfc_pay=rfc_pay,
-                debug_info=debug_info
-            )
+            try:
+                pdf_path = generate_pdf(
+                    stock=stock,
+                    location=location_name,
+                    zip_code=zip_code,
+                    url=url,
+                    utc_time=utc_now,
+                    https_date=hdate,
+                    price_path=price_path if price_ok else None,
+                    pay_path=pay_path if pay_ok else None,
+                    sha_price=sha_price,
+                    sha_pay=sha_pay,
+                    rfc_price=rfc_price,
+                    rfc_pay=rfc_pay,
+                    debug_info=debug_info
+                )
+            except Exception as e:
+                print(f"❌ PDF generation error: {e}")
+                traceback.print_exc()
+                pdf_path = None
 
-        # Save to database
-        with get_db() as conn:
-            cursor = conn.execute("""
-                INSERT INTO captures (
-                    stock, location, zip_code, url, capture_utc, https_date,
-                    price_sha256, payment_sha256, price_screenshot_path, payment_screenshot_path,
-                    price_tsa, price_timestamp, payment_tsa, payment_timestamp,
+        # Save to database (even if PDF failed)
+        capture_id = None
+        try:
+            with get_db() as conn:
+                cursor = conn.execute("""
+                    INSERT INTO captures (
+                        stock, location, zip_code, url, capture_utc, https_date,
+                        price_sha256, payment_sha256, price_screenshot_path, payment_screenshot_path,
+                        price_tsa, price_timestamp, payment_tsa, payment_timestamp,
+                        pdf_path, debug_info
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    stock, location_name, zip_code, url, utc_now, hdate,
+                    sha_price, sha_pay, price_path, pay_path,
+                    rfc_price['tsa'] if rfc_price else None,
+                    rfc_price['timestamp'] if rfc_price else None,
+                    rfc_pay['tsa'] if rfc_pay else None,
+                    rfc_pay['timestamp'] if rfc_pay else None,
                     pdf_path, debug_info
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                stock, location_name, zip_code, url, utc_now, hdate,
-                sha_price, sha_pay, price_path, pay_path,
-                rfc_price['tsa'] if rfc_price else None,
-                rfc_price['timestamp'] if rfc_price else None,
-                rfc_pay['tsa'] if rfc_pay else None,
-                rfc_pay['timestamp'] if rfc_pay else None,
-                pdf_path, debug_info
-            ))
-            capture_id = cursor.lastrowid
+                ))
+                capture_id = cursor.lastrowid
+                print(f"✓ Saved to database with ID: {capture_id}")
+        except Exception as e:
+            print(f"⚠ Database save failed: {e}")
+            traceback.print_exc()
 
-        # Return PDF download
+        # Return PDF download if available
         if pdf_path and os.path.exists(pdf_path):
             return send_file(pdf_path, mimetype="application/pdf", as_attachment=True,
-                           download_name=f"CW_Capture_{stock}_{capture_id}.pdf")
+                           download_name=f"CW_Capture_{stock}_{capture_id or 'temp'}.pdf")
         else:
-            return Response("Capture completed but PDF generation failed", status=500)
+            # Return error page with debug info if PDF failed
+            error_html = f"""
+<!doctype html>
+<html>
+<head><title>PDF Generation Failed</title>
+<style>body{{font-family:sans-serif;padding:40px;background:#f3f4f6}}
+.error{{background:#fff;padding:20px;border-radius:8px;max-width:800px;margin:0 auto}}
+h1{{color:#dc2626}}pre{{background:#f9fafb;padding:12px;border-radius:4px;overflow:auto}}
+a{{color:#2563eb}}</style>
+</head>
+<body>
+<div class="error">
+<h1>PDF Generation Failed</h1>
+<p>Screenshots were captured successfully but PDF generation failed.</p>
+<p><strong>Stock:</strong> {stock} | <strong>Location:</strong> {location_name}</p>
+<p><strong>Price OK:</strong> {price_ok} | <strong>Payment OK:</strong> {pay_ok}</p>
+<h3>Debug Information:</h3>
+<pre>{debug_info}</pre>
+<p><a href="/">← Back to Home</a></p>
+</div>
+</body>
+</html>
+            """
+            return Response(error_html, mimetype="text/html", status=500)
 
     except Exception as e:
         print("❌ /capture failed:", e, file=sys.stderr)
@@ -276,121 +319,175 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
                  price_path, pay_path, sha_price, sha_pay, 
                  rfc_price, rfc_pay, debug_info):
     """Generate PDF report with screenshots side by side"""
-    tmpdir = os.path.dirname(price_path or pay_path)
-    pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
-    
-    doc = SimpleDocTemplate(pdf_path, pagesize=letter,
-                           leftMargin=0.5*inch, rightMargin=0.5*inch,
-                           topMargin=0.5*inch, bottomMargin=0.5*inch)
-    
-    story = []
-    styles = getSampleStyleSheet()
-    
-    # Title
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=18,
-        textColor=colors.HexColor('#003087'),
-        spaceAfter=12,
-        alignment=TA_CENTER
-    )
-    story.append(Paragraph("Camping World Compliance Capture Report", title_style))
-    story.append(Spacer(1, 0.2*inch))
-    
-    # Metadata table
-    meta_data = [
-        ['Stock Number:', stock],
-        ['Location:', f"{location} (ZIP: {zip_code})"],
-        ['URL:', url],
-        ['Capture Time (UTC):', utc_time],
-        ['HTTPS Date:', https_date or 'N/A'],
-    ]
-    
-    meta_table = Table(meta_data, colWidths=[2*inch, 5*inch])
-    meta_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f3f4f6')),
-        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-        ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-    ]))
-    story.append(meta_table)
-    story.append(Spacer(1, 0.2*inch))
-    
-    # RFC 3161 Timestamps
-    if rfc_price or rfc_pay:
-        story.append(Paragraph("🔒 Cryptographic Timestamps (RFC 3161)", styles['Heading2']))
-        ts_data = []
-        if rfc_price:
-            ts_data.append(['Price Screenshot:', f"{rfc_price['timestamp']} (TSA: {rfc_price['tsa']})"])
-        if rfc_pay:
-            ts_data.append(['Payment Screenshot:', f"{rfc_pay['timestamp']} (TSA: {rfc_pay['tsa']})"])
+    try:
+        # Determine tmpdir from available path
+        if price_path:
+            tmpdir = os.path.dirname(price_path)
+        elif pay_path:
+            tmpdir = os.path.dirname(pay_path)
+        else:
+            tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
         
-        ts_table = Table(ts_data, colWidths=[2*inch, 5*inch])
-        ts_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#ecfdf5')),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#10b981')),
-        ]))
-        story.append(ts_table)
+        pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
+        print(f"📄 Generating PDF at: {pdf_path}")
+        
+        doc = SimpleDocTemplate(pdf_path, pagesize=letter,
+                               leftMargin=0.5*inch, rightMargin=0.5*inch,
+                               topMargin=0.5*inch, bottomMargin=0.5*inch)
+        
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Title
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            textColor=colors.HexColor('#003087'),
+            spaceAfter=12,
+            alignment=TA_CENTER
+        )
+        story.append(Paragraph("Camping World Compliance Capture Report", title_style))
         story.append(Spacer(1, 0.2*inch))
-    
-    # Screenshots side by side
-    story.append(Paragraph("Captured Screenshots", styles['Heading2']))
-    story.append(Spacer(1, 0.1*inch))
-    
-    images_row = []
-    img_width = 3.25*inch
-    img_height = 4*inch
-    
-    if price_path and os.path.exists(price_path):
-        # Resize image to fit
-        img = PILImage.open(price_path)
-        aspect = img.height / img.width
-        img_obj = Image(price_path, width=img_width, height=img_width*aspect if img_width*aspect < img_height else img_height)
-        images_row.append(img_obj)
-    else:
-        images_row.append(Paragraph("Price screenshot\nnot available", styles['Normal']))
-    
-    if pay_path and os.path.exists(pay_path):
-        img = PILImage.open(pay_path)
-        aspect = img.height / img.width
-        img_obj = Image(pay_path, width=img_width, height=img_width*aspect if img_width*aspect < img_height else img_height)
-        images_row.append(img_obj)
-    else:
-        images_row.append(Paragraph("Payment screenshot\nnot available", styles['Normal']))
-    
-    img_table = Table([images_row], colWidths=[3.5*inch, 3.5*inch])
-    img_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-    ]))
-    story.append(img_table)
-    story.append(Spacer(1, 0.2*inch))
-    
-    # SHA-256 Hashes
-    story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
-    hash_data = [
-        ['Price Screenshot:', sha_price],
-        ['Payment Screenshot:', sha_pay],
-    ]
-    hash_table = Table(hash_data, colWidths=[2*inch, 5*inch])
-    hash_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-        ('FONTNAME', (1, 0), (1, -1), 'Courier'),
-        ('FONTSIZE', (0, 0), (-1, -1), 7),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-    ]))
-    story.append(hash_table)
-    
-    doc.build(story)
-    print(f"✓ PDF generated: {pdf_path}")
-    return pdf_path
+        
+        # Metadata table
+        meta_data = [
+            ['Stock Number:', stock],
+            ['Location:', f"{location} (ZIP: {zip_code})"],
+            ['URL:', url],
+            ['Capture Time (UTC):', utc_time],
+            ['HTTPS Date:', https_date or 'N/A'],
+        ]
+        
+        meta_table = Table(meta_data, colWidths=[2*inch, 5*inch])
+        meta_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f3f4f6')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(meta_table)
+        story.append(Spacer(1, 0.2*inch))
+        
+        # RFC 3161 Timestamps
+        if rfc_price or rfc_pay:
+            story.append(Paragraph("Cryptographic Timestamps (RFC 3161)", styles['Heading2']))
+            ts_data = []
+            if rfc_price:
+                ts_data.append(['Price Screenshot:', f"{rfc_price['timestamp']} | TSA: {rfc_price['tsa']}"])
+            if rfc_pay:
+                ts_data.append(['Payment Screenshot:', f"{rfc_pay['timestamp']} | TSA: {rfc_pay['tsa']}"])
+            
+            ts_table = Table(ts_data, colWidths=[2*inch, 5*inch])
+            ts_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#ecfdf5')),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#10b981')),
+            ]))
+            story.append(ts_table)
+            story.append(Spacer(1, 0.2*inch))
+        
+        # Screenshots side by side
+        story.append(Paragraph("Captured Screenshots", styles['Heading2']))
+        story.append(Spacer(1, 0.1*inch))
+        
+        images_row = []
+        labels_row = []
+        
+        # Price screenshot
+        if price_path and os.path.exists(price_path):
+            try:
+                # Open and resize image
+                img = PILImage.open(price_path)
+                img_width = 3.25*inch
+                aspect = img.height / img.width
+                target_height = img_width * aspect
+                
+                # Limit height
+                if target_height > 6*inch:
+                    target_height = 6*inch
+                    img_width = target_height / aspect
+                
+                img_obj = Image(price_path, width=img_width, height=target_height)
+                images_row.append(img_obj)
+                labels_row.append(Paragraph("<b>Price Tooltip</b>", styles['Normal']))
+            except Exception as e:
+                print(f"⚠ Error processing price image: {e}")
+                images_row.append(Paragraph("Price screenshot\navailable but\ncould not render", styles['Normal']))
+                labels_row.append(Paragraph("<b>Price Tooltip</b>", styles['Normal']))
+        else:
+            images_row.append(Paragraph("Price screenshot\nnot available", styles['Normal']))
+            labels_row.append(Paragraph("<b>Price Tooltip</b>", styles['Normal']))
+        
+        # Payment screenshot
+        if pay_path and os.path.exists(pay_path):
+            try:
+                img = PILImage.open(pay_path)
+                img_width = 3.25*inch
+                aspect = img.height / img.width
+                target_height = img_width * aspect
+                
+                if target_height > 6*inch:
+                    target_height = 6*inch
+                    img_width = target_height / aspect
+                
+                img_obj = Image(pay_path, width=img_width, height=target_height)
+                images_row.append(img_obj)
+                labels_row.append(Paragraph("<b>Payment Tooltip</b>", styles['Normal']))
+            except Exception as e:
+                print(f"⚠ Error processing payment image: {e}")
+                images_row.append(Paragraph("Payment screenshot\navailable but\ncould not render", styles['Normal']))
+                labels_row.append(Paragraph("<b>Payment Tooltip</b>", styles['Normal']))
+        else:
+            images_row.append(Paragraph("Payment screenshot\nnot available", styles['Normal']))
+            labels_row.append(Paragraph("<b>Payment Tooltip</b>", styles['Normal']))
+        
+        # Add labels then images
+        label_table = Table([labels_row], colWidths=[3.5*inch, 3.5*inch])
+        label_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+        ]))
+        story.append(label_table)
+        story.append(Spacer(1, 0.1*inch))
+        
+        img_table = Table([images_row], colWidths=[3.5*inch, 3.5*inch])
+        img_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ]))
+        story.append(img_table)
+        story.append(Spacer(1, 0.2*inch))
+        
+        # SHA-256 Hashes
+        story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
+        hash_data = [
+            ['Price Screenshot:', sha_price],
+            ['Payment Screenshot:', sha_pay],
+        ]
+        hash_table = Table(hash_data, colWidths=[2*inch, 5*inch])
+        hash_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 0), (1, -1), 'Courier'),
+            ('FONTSIZE', (0, 0), (-1, -1), 7),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        story.append(hash_table)
+        
+        # Build PDF
+        doc.build(story)
+        print(f"✓ PDF generated successfully: {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
+        return pdf_path
+        
+    except Exception as e:
+        print(f"❌ PDF generation failed: {e}")
+        traceback.print_exc()
+        return None
 
 def sha256_file(path: str) -> str:
     if not path or not os.path.exists(path): return "N/A"
