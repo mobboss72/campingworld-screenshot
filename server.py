@@ -312,12 +312,6 @@ def admin_storage():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# -------------------- Routes --------------------
-
-@app.get("/")
-def root():
-    return send_from_directory(".", "index.html")
-
 @app.get("/admin")
 @require_admin_auth
 def admin_dashboard():
