@@ -546,7 +546,7 @@
       loading.classList.add('active');
 
       // Crucial Fix: Re-submit the form after the UI has updated. 
-      // The form will use its specified method="POST" and action="/capture".
+      // This is the fix for the 405 error from the previous turn.
       setTimeout(() => {
           form.submit();
       }, 10);
