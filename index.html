@@ -68,15 +68,23 @@
       margin-top: 1rem;
     }
 
-    input[type="text"] {
+    label {
+      font-weight: 600;
+      font-size: 0.9rem;
+      color: var(--text);
+      margin-bottom: -8px;
+    }
+
+    input[type="text"], select {
       padding: 12px;
       font-size: 1rem;
       border: 1px solid #ccc;
       border-radius: 8px;
       transition: border-color 0.2s ease;
+      font-family: inherit;
     }
 
-    input[type="text"]:focus {
+    input[type="text"]:focus, select:focus {
       border-color: var(--accent);
       outline: none;
       box-shadow: 0 0 5px rgba(0,85,164,0.2);
@@ -98,9 +106,43 @@
       background: var(--accent);
     }
 
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .history-link {
+      display: inline-block;
+      margin-top: 1rem;
+      padding: 8px 16px;
+      background: #f3f4f6;
+      color: var(--primary);
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      transition: background 0.2s ease;
+    }
+
+    .history-link:hover {
+      background: #e5e7eb;
+    }
+
     @keyframes fadeIn {
       from { opacity: 0; transform: translateY(10px); }
       to { opacity: 1; transform: translateY(0); }
+    }
+
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 1rem;
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .loading.active {
+      display: block;
     }
 
     footer {
@@ -118,23 +160,52 @@
 
   <div class="content">
     <h2>Welcome</h2>
-    <p>This tool captures compliance screenshots from Camping World RV listings, including hover states for price and payment details. Each capture includes a legal timestamp and SHA-256 hash for verification.</p>
+    <p>This tool captures compliance screenshots from Camping World RV listings, including hover states for price and payment details. Each capture includes legal timestamps and SHA-256 hashes for verification.</p>
 
     <h3>How to Use:</h3>
     <ol>
+      <li>Select the Camping World location (sets ZIP code for finance calculations).</li>
       <li>Enter a valid Camping World stock number (e.g., 2319928).</li>
-      <li>Click <strong>Run Capture</strong> to generate screenshots.</li>
-      <li>View the resulting images with timestamps and hashes.</li>
+      <li>Click <strong>Run Capture</strong> to generate screenshots and download PDF.</li>
     </ol>
 
-    <form method="POST" action="/capture">
-      <input type="text" name="stock" placeholder="Enter stock number..." required>
-      <button type="submit">Run Capture</button>
+    <form method="POST" action="/capture" id="captureForm">
+      <label for="location">Camping World Location:</label>
+      <select name="location" id="location" required>
+        <option value="bend">Bend, OR (97701)</option>
+        <option value="eugene">Eugene, OR (97402)</option>
+        <option value="hillsboro">Hillsboro, OR (97124)</option>
+        <option value="medford">Medford, OR (97504)</option>
+        <option value="portland" selected>Portland, OR (97201)</option>
+      </select>
+
+      <label for="stock">Stock Number:</label>
+      <input type="text" name="stock" id="stock" placeholder="Enter stock number..." required>
+      
+      <button type="submit" id="submitBtn">Run Capture</button>
     </form>
+
+    <div class="loading" id="loading">
+      ⏳ Capturing screenshots and generating PDF... This may take 30-60 seconds.
+    </div>
+
+    <a href="/history" class="history-link">📋 View Capture History</a>
   </div>
 
   <footer>
-    © 2025 CW Compliance Tool V3.0
+    © 2025 CW Compliance Tool V4.0
   </footer>
+
+  <script>
+    const form = document.getElementById('captureForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const loading = document.getElementById('loading');
+
+    form.addEventListener('submit', function(e) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Capturing...';
+      loading.classList.add('active');
+    });
+  </script>
 </body>
 </html>
