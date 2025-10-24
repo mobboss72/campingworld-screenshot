@@ -1,49 +1,51 @@
-# Base on official Python 3.13 slim image (Debian-based) for pre-installed Python
-FROM python:3.13-slim
+FROM python:3.11-slim
 
-# Install system dependencies required for Chromium Headless Shell
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    libglib2.0-0 \
-    libnss3 \
-    libatk1.0-0 \
+    wget \
+    gnupg \
+    ca-certificates \
+    fonts-liberation \
+    libasound2 \
     libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libcups2 \
+    libdbus-1-3 \
     libdrm2 \
-    libxkbcommon0 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libwayland-client0 \
     libxcomposite1 \
     libxdamage1 \
     libxfixes3 \
+    libxkbcommon0 \
     libxrandr2 \
-    libgbm1 \
-    libasound2 \
-    libpangocairo-1.0-0 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libatspi2.0-0 \
-    libgtk-3-0 \
-    libdbus-glib-1-2 \
-    libxt6 \
-    fonts-liberation \
-    libappindicator3-1 \
-    libnspr4 \
-    lsb-release \
-    wget \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
+# Copy requirements and install Python packages
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers with custom path
-RUN mkdir -p /app/ms-playwright && \
-    PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright python -m playwright install --with-deps chromium
+# Install Playwright browsers
+RUN playwright install chromium
 
-# Copy app code
+# Create data directory for database and captures
+RUN mkdir -p /app/data
+
+# Copy application files
 COPY . .
 
-# Expose port and set entrypoint using shell form for variable expansion
-EXPOSE $PORT
-CMD gunicorn -w 1 --timeout 180 -b 0.0.0.0:$PORT server:app
+# Make start script executable
+RUN chmod +x start.sh
+
+# Expose port
+EXPOSE 8080
+
+# Run the application
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "120", "--workers", "2", "server:app"]
