@@ -13,7 +13,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 PORT = int(os.getenv("PORT", "8080"))
 OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
-APP_VERSION = "2025-10-24T01:20Z  dual-tooltips + payment-proximity"
+APP_VERSION = "2025-10-24T01:45Z  dual-tooltips + payment-proximity (evaluate-args fix)"
 
 # ---------------- App ----------------
 app = Flask(__name__, static_folder=None)
@@ -194,18 +194,19 @@ def capture_price(page, out_path, log):
         log.append("price: no elements")
         return
 
-    # Pick the one that looks like a dollar amount (prefer the last match)
+    # Prefer the last $ element (often the breakdown row is second)
     idx = 0
     for i in range(count):
         t = (elems.nth(i).text_content() or "").strip()
-        if "$" in t: idx = i
+        if "$" in t:
+            idx = i
     target = elems.nth(idx)
     ttxt = (target.text_content() or "").strip()
     log.append(f"price use idx={idx} text='{ttxt}'")
 
     target.scroll_into_view_if_needed()
 
-    # Try adjacent info icon first
+    # Adjacent info icon if present
     icon = target.locator(
         "xpath=following::*[contains(@class,'MuiSvgIcon-root') or contains(@data-testid,'Info') or contains(@class,'MuiTooltip')][1]"
     )
@@ -247,67 +248,54 @@ def capture_payment(page, out_path, log):
     vis.scroll_into_view_if_needed()
     log.append("payment anchor scrolled into view")
 
-    # 2) Try to find a nearby trigger with aria-describedby (MUI tooltips mark the trigger)
-    #    We search within the closest stacked container to keep it local.
-    try:
-        page.eval_on_selector(
-            "body",
-            """(_,)=>
-            { /* no-op to ensure eval context ok */ }"""
-        )
-    except Exception:
-        pass
-
-    # Mark a nearby trigger (if any) with a temp data-attr we can locate from Python.
+    # 2) Proximity trigger finder (pass ONE arg object to evaluate)
     data_key = f"data-paytrigger-{int(datetime.datetime.utcnow().timestamp())}"
-    found = page.evaluate(
-        """(anchorSel, dataKey) => {
-            const anchor = document.evaluate(anchorSel, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
-            if (!anchor) return false;
+    found = False
+    try:
+        found = page.evaluate(
+            """({anchorSel, dataKey}) => {
+                const anchor = document.evaluate(anchorSel, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                if (!anchor) return false;
 
-            // Find a local container row
-            let row = anchor.closest('[class*="MuiStack"], [class*="MuiBox"], [class*="MuiGrid"], [class*="MuiTypography"]') || anchor.parentElement;
-            if (!row) row = anchor.parentElement || document.body;
+                let row = anchor.closest('[class*="MuiStack"], [class*="MuiBox"], [class*="MuiGrid"], [class*="MuiTypography"]') || anchor.parentElement;
+                if (!row) row = anchor.parentElement || document.body;
 
-            // candidates: elements with aria-describedby (mui tooltip), or small svg/info-like controls
-            const cands = Array.from(row.querySelectorAll('[aria-describedby], [title], [aria-label], svg, button, span, i'));
-            const ar = anchor.getBoundingClientRect();
-            let best = null, bestScore = 1e9;
+                const cands = Array.from(row.querySelectorAll('[aria-describedby], [title], [aria-label], svg, button, span, i'));
+                const ar = anchor.getBoundingClientRect();
+                let best = null, bestScore = 1e9;
 
-            for (const el of cands) {
-              if (!(el instanceof HTMLElement)) continue;
-              const r = el.getBoundingClientRect();
-              if (!r.width || !r.height) continue;
+                for (const el of cands) {
+                  if (!(el instanceof HTMLElement)) continue;
+                  const r = el.getBoundingClientRect();
+                  if (!r.width || !r.height) continue;
 
-              // skip huge blocks; prefer small inline-ish elements
-              const area = r.width * r.height;
-              if (area > 50000) continue;
+                  const area = r.width * r.height;
+                  if (area > 50000) continue;
 
-              // distance favoring same line and near the right side of label
-              const cx = r.left + r.width/2, cy = r.top + r.height/2;
-              const ax = ar.left + ar.width*0.8, ay = ar.top + ar.height/2;
-              const dx = cx - ax, dy = cy - ay;
-              const dist = Math.hypot(dx, dy);
+                  const cx = r.left + r.width/2, cy = r.top + r.height/2;
+                  const ax = ar.left + ar.width*0.8, ay = ar.top + ar.height/2;
+                  const dx = cx - ax, dy = cy - ay;
+                  const dist = Math.hypot(dx, dy);
 
-              // boost if aria-describedby present or looks like info
-              const hasAD = el.hasAttribute('aria-describedby');
-              const looksInfo = /info|i|ⓘ|!/.test((el.getAttribute('aria-label')||'')+(el.getAttribute('title')||'')+(el.className||''));
-              let score = dist + (hasAD ? -40 : 0) + (looksInfo ? -20 : 0) + (area/400.0);
+                  const hasAD = el.hasAttribute('aria-describedby');
+                  const looksInfo = /info|ⓘ|!/i.test((el.getAttribute('aria-label')||'')+(el.getAttribute('title')||'')+(el.className||''));
+                  let score = dist + (hasAD ? -40 : 0) + (looksInfo ? -20 : 0) + (area/400.0);
 
-              // within about same row
-              if (Math.abs(dy) > 60) score += 200;
+                  if (Math.abs(dy) > 60) score += 200;
 
-              if (!best || score < bestScore) { best = el; bestScore = score; }
-            }
+                  if (!best || score < bestScore) { best = el; bestScore = score; }
+                }
 
-            if (best) {
-              best.setAttribute(dataKey, "1");
-              return true;
-            }
-            return false;
-        }""",
-        anchor_xpath, data_key
-    )
+                if (best) {
+                  best.setAttribute(dataKey, "1");
+                  return true;
+                }
+                return false;
+            }""",
+            {"anchorSel": anchor_xpath.replace("xpath=", ""), "dataKey": data_key},
+        )
+    except Exception as e:
+        log.append(f"payment proximity eval error: {e}")
 
     trigger = None
     if found:
@@ -357,7 +345,6 @@ def capture_payment(page, out_path, log):
 
 # ---------------- Tooltip helpers ----------------
 def _wait_tooltip_visible(page, log, label="", soft=False):
-    # include typical MUI tooltip/popover mounts
     sel = "[role='tooltip'], .MuiTooltip-popper, [data-popper-placement], .MuiPopover-root .MuiPaper-root"
     try:
         page.wait_for_selector(sel, state="visible", timeout=5000)
