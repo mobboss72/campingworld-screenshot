@@ -368,20 +368,20 @@ def history():
   
   <form method="GET" action="/history" class="filters">
     <div class="filter-group">
-      <label for="location">Filter by Location</label>
-      <select name="location" id="location">
-        <option value="all" {{'selected' if not location_filter or location_filter == 'all' else ''}}>All Locations</option>
-        <option value="bend" {{'selected' if location_filter == 'bend' else ''}}>Bend</option>
-        <option value="eugene" {{'selected' if location_filter == 'eugene' else ''}}>Eugene</option>
-        <option value="hillsboro" {{'selected' if location_filter == 'hillsboro' else ''}}>Hillsboro</option>
-        <option value="medford" {{'selected' if location_filter == 'medford' else ''}}>Medford</option>
-        <option value="portland" {{'selected' if location_filter == 'portland' else ''}}>Portland</option>
-      </select>
+      <label for="stock">Search by Stock Number</label>
+      <input type="text" name="stock" id="stock" placeholder="Enter stock number..." value="{{stock_filter or ''}}">
     </div>
     
     <div class="filter-group">
-      <label for="stock">Search by Stock Number</label>
-      <input type="text" name="stock" id="stock" placeholder="Enter stock number..." value="{{stock_filter or ''}}">
+      <label for="location">Filter by Location</label>
+      <select name="location" id="location">
+        <option value="all" {{'selected' if not location_filter or location_filter.lower() == 'all' else ''}}>All Locations</option>
+        <option value="bend" {{'selected' if location_filter.lower() == 'bend' else ''}}>Bend</option>
+        <option value="eugene" {{'selected' if location_filter.lower() == 'eugene' else ''}}>Eugene</option>
+        <option value="hillsboro" {{'selected' if location_filter.lower() == 'hillsboro' else ''}}>Hillsboro</option>
+        <option value="medford" {{'selected' if location_filter.lower() == 'medford' else ''}}>Medford</option>
+        <option value="portland" {{'selected' if location_filter.lower() == 'portland' else ''}}>Portland</option>
+      </select>
     </div>
     
     <div class="filter-group">
@@ -395,15 +395,18 @@ def history():
       </select>
     </div>
     
-    <div class="filter-group" style="justify-content:flex-end">
+    <div class="filter-group" style="justify-content:flex-end;display:flex;gap:8px">
       <label>&nbsp;</label>
-      <button type="submit">Apply Filters</button>
+      <div style="display:flex;gap:8px">
+        <button type="submit" style="background:#2563eb">Apply Filters</button>
+        <a href="/history" style="background:#6b7280;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-flex;align-items:center">Reset</a>
+      </div>
     </div>
   </form>
   
   <div class="stats">
     Showing {{captures|length}} capture(s)
-    {% if location_filter and location_filter != 'all' %} · Filtered by location: <strong>{{location_filter.title()}}</strong>{% endif %}
+    {% if location_filter and location_filter.lower() != 'all' %} · Filtered by location: <strong>{{location_filter.capitalize()}}</strong>{% endif %}
     {% if stock_filter %} · Search: <strong>{{stock_filter}}</strong>{% endif %}
   </div>
   
