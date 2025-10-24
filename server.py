@@ -12,6 +12,8 @@ from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from PIL import Image as PILImage
 import sqlite3
 from contextlib import contextmanager
+from functools import wraps
+import threading
 
 # Persist Playwright downloads
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
@@ -20,9 +22,9 @@ PORT = int(os.getenv("PORT", "8080"))
 DB_PATH = os.getenv("DB_PATH", "/app/data/captures.db")
 
 # Storage configuration
-STORAGE_MODE = os.getenv("STORAGE_MODE", "ephemeral")
+STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")  # Changed to persistent
 PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", "/app/data/captures")
-AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "7"))
+AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))  # 90 days retention
 
 # Oregon Camping World locations (alphabetical) with coordinates
 CW_LOCATIONS = {
@@ -96,14 +98,37 @@ def init_db():
 
 init_db()
 
+# -------------------- Automatic Cleanup Scheduler --------------------
+
+def schedule_cleanup():
+    """Run cleanup every 24 hours"""
+    def cleanup_task():
+        while True:
+            time.sleep(24 * 60 * 60)  # 24 hours
+            print("🕐 Running scheduled cleanup...")
+            try:
+                result = cleanup_old_files(AUTO_CLEANUP_DAYS)
+                print(f"✓ Scheduled cleanup complete: {result['cleaned']} dirs, {result['size_mb']} MB freed")
+            except Exception as e:
+                print(f"❌ Scheduled cleanup failed: {e}")
+    
+    cleanup_thread = threading.Thread(target=cleanup_task, daemon=True)
+    cleanup_thread.start()
+    print(f"✓ Automatic cleanup scheduled (every 24 hours, {AUTO_CLEANUP_DAYS} day retention)")
+
+# Start cleanup scheduler
+schedule_cleanup()
+
 # -------------------- Cleanup Utilities --------------------
 
-def cleanup_old_files(days_old=7):
-    """Clean up screenshot files older than specified days"""
+def cleanup_old_files(days_old=90):
+    """Clean up screenshot files and PDFs older than specified days"""
     try:
         cutoff_time = time.time() - (days_old * 24 * 60 * 60)
         cleaned_count = 0
+        cleaned_size = 0
         
+        # Clean up temp directories
         temp_base = tempfile.gettempdir()
         for item in os.listdir(temp_base):
             if item.startswith("cw-"):
@@ -112,6 +137,13 @@ def cleanup_old_files(days_old=7):
                     if os.path.isdir(item_path):
                         dir_mtime = os.path.getmtime(item_path)
                         if dir_mtime < cutoff_time:
+                            # Calculate size before deleting
+                            for root, dirs, files in os.walk(item_path):
+                                for f in files:
+                                    fp = os.path.join(root, f)
+                                    if os.path.exists(fp):
+                                        cleaned_size += os.path.getsize(fp)
+                            
                             import shutil
                             shutil.rmtree(item_path)
                             cleaned_count += 1
@@ -119,18 +151,42 @@ def cleanup_old_files(days_old=7):
                 except Exception as e:
                     print(f"⚠ Could not clean {item_path}: {e}")
         
-        print(f"✓ Cleanup complete: removed {cleaned_count} old directories")
-        return cleaned_count
+        # Clean up persistent storage if enabled
+        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
+            for item in os.listdir(PERSISTENT_STORAGE_PATH):
+                if item.startswith("cw-"):
+                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    try:
+                        if os.path.isdir(item_path):
+                            dir_mtime = os.path.getmtime(item_path)
+                            if dir_mtime < cutoff_time:
+                                # Calculate size before deleting
+                                for root, dirs, files in os.walk(item_path):
+                                    for f in files:
+                                        fp = os.path.join(root, f)
+                                        if os.path.exists(fp):
+                                            cleaned_size += os.path.getsize(fp)
+                                
+                                import shutil
+                                shutil.rmtree(item_path)
+                                cleaned_count += 1
+                                print(f"🧹 Cleaned up old persistent directory: {item}")
+                    except Exception as e:
+                        print(f"⚠ Could not clean {item_path}: {e}")
+        
+        cleaned_size_mb = cleaned_size / (1024 * 1024)
+        print(f"✓ Cleanup complete: removed {cleaned_count} directories ({cleaned_size_mb:.2f} MB)")
+        return {"cleaned": cleaned_count, "size_mb": round(cleaned_size_mb, 2)}
     except Exception as e:
         print(f"❌ Cleanup failed: {e}")
-        return 0
+        return {"cleaned": 0, "size_mb": 0}
 
 @app.get("/admin/cleanup")
 def admin_cleanup():
     """Manual cleanup endpoint"""
-    days = request.args.get("days", 7, type=int)
-    count = cleanup_old_files(days)
-    return jsonify({"cleaned": count, "days_old": days})
+    days = request.args.get("days", AUTO_CLEANUP_DAYS, type=int)
+    result = cleanup_old_files(days)
+    return jsonify({"cleaned": result["cleaned"], "size_mb": result["size_mb"], "days_old": days})
 
 @app.get("/admin/storage")
 def admin_storage():
@@ -151,6 +207,7 @@ def admin_storage():
                 else:
                     files_missing += 1
         
+        # Calculate temp storage
         temp_size = 0
         temp_dirs = 0
         temp_base = tempfile.gettempdir()
@@ -165,7 +222,28 @@ def admin_storage():
                             if os.path.exists(fp):
                                 temp_size += os.path.getsize(fp)
         
+        # Calculate persistent storage
+        persistent_size = 0
+        persistent_dirs = 0
+        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
+            for item in os.listdir(PERSISTENT_STORAGE_PATH):
+                if item.startswith("cw-"):
+                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    if os.path.isdir(item_path):
+                        persistent_dirs += 1
+                        for root, dirs, files in os.walk(item_path):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                if os.path.exists(fp):
+                                    persistent_size += os.path.getsize(fp)
+        
         temp_size_mb = temp_size / (1024 * 1024)
+        persistent_size_mb = persistent_size / (1024 * 1024)
+        total_size_mb = temp_size_mb + persistent_size_mb
+        
+        # Calculate estimated max storage (90 days, 3/day)
+        estimated_max_captures = 90 * 3  # 270 captures
+        estimated_max_size_mb = estimated_max_captures * 5  # ~5MB per capture
         
         return jsonify({
             "storage_mode": STORAGE_MODE,
@@ -179,6 +257,21 @@ def admin_storage():
             "temp_storage": {
                 "directories": temp_dirs,
                 "size_mb": round(temp_size_mb, 2)
+            },
+            "persistent_storage": {
+                "directories": persistent_dirs,
+                "size_mb": round(persistent_size_mb, 2)
+            },
+            "total_storage": {
+                "size_mb": round(total_size_mb, 2),
+                "size_gb": round(total_size_mb / 1024, 2)
+            },
+            "estimates": {
+                "max_captures_90_days": estimated_max_captures,
+                "estimated_max_size_mb": estimated_max_size_mb,
+                "estimated_max_size_gb": round(estimated_max_size_mb / 1024, 2),
+                "plan_limit_gb": 100,
+                "estimated_usage_percent": round((estimated_max_size_mb / 1024 / 100) * 100, 2)
             }
         })
     except Exception as e:
@@ -199,13 +292,39 @@ def serve_shot(sid):
 
 @app.get("/history")
 def history():
+    # Get filter parameters
+    location_filter = request.args.get("location", "").strip().lower()
+    stock_filter = request.args.get("stock", "").strip()
+    sort_by = request.args.get("sort", "date_desc")
+    
     with get_db() as conn:
-        captures = conn.execute("""
-            SELECT id, stock, location, capture_utc, price_sha256, payment_sha256
-            FROM captures
-            ORDER BY created_at DESC
-            LIMIT 100
-        """).fetchall()
+        query = "SELECT id, stock, location, capture_utc, price_sha256, payment_sha256 FROM captures WHERE 1=1"
+        params = []
+        
+        # Apply filters
+        if location_filter and location_filter != "all":
+            query += " AND LOWER(location) = ?"
+            params.append(location_filter)
+        
+        if stock_filter:
+            query += " AND stock LIKE ?"
+            params.append(f"%{stock_filter}%")
+        
+        # Apply sorting
+        if sort_by == "date_asc":
+            query += " ORDER BY created_at ASC"
+        elif sort_by == "stock_asc":
+            query += " ORDER BY stock ASC"
+        elif sort_by == "stock_desc":
+            query += " ORDER BY stock DESC"
+        elif sort_by == "location":
+            query += " ORDER BY location ASC, created_at DESC"
+        else:  # date_desc (default)
+            query += " ORDER BY created_at DESC"
+        
+        query += " LIMIT 100"
+        
+        captures = conn.execute(query, params).fetchall()
     
     html = render_template_string("""
 <!doctype html>
@@ -218,19 +337,74 @@ def history():
     h1{margin:0 0 16px}
     .back{display:inline-block;margin-bottom:16px;color:#2563eb;text-decoration:none;font-weight:600}
     .back:hover{text-decoration:underline}
+    .filters{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+    .filter-group{display:flex;flex-direction:column;gap:6px}
+    .filter-group label{font-size:13px;font-weight:600;color:#374151}
+    .filter-group select,.filter-group input{padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:14px}
+    .filter-group button{background:#2563eb;color:#fff;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:600}
+    .filter-group button:hover{background:#1d4ed8}
+    .stats{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:14px;color:#6b7280}
     table{width:100%;background:#fff;border-collapse:collapse;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
-    th{background:#2563eb;color:#fff;padding:12px;text-align:left;font-weight:600}
-    td{padding:12px;border-bottom:1px solid #e5e7eb}
+    th{background:#2563eb;color:#fff;padding:12px;text-align:left;font-weight:600;font-size:13px}
+    td{padding:12px;border-bottom:1px solid #e5e7eb;font-size:14px}
     tr:last-child td{border-bottom:none}
     tr:hover{background:#f9fafb}
-    .view-btn{background:#2563eb;color:#fff;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:13px}
+    .view-btn{background:#2563eb;color:#fff;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:13px;display:inline-block}
     .view-btn:hover{background:#1d4ed8}
-    .empty{text-align:center;padding:40px;color:#666}
+    .empty{text-align:center;padding:40px;color:#666;background:#fff;border-radius:8px}
+    .location-badge{display:inline-block;padding:4px 8px;background:#e0e7ff;color:#3730a3;border-radius:4px;font-size:12px;font-weight:600}
+    @media(max-width:768px){
+      .filters{grid-template-columns:1fr}
+      table{font-size:12px}
+      th,td{padding:8px}
+    }
   </style>
 </head>
 <body>
   <a href="/" class="back">← Back to Capture Tool</a>
   <h1>Capture History</h1>
+  
+  <form method="GET" action="/history" class="filters">
+    <div class="filter-group">
+      <label for="location">Filter by Location</label>
+      <select name="location" id="location">
+        <option value="all" {{'selected' if not location_filter or location_filter == 'all' else ''}}>All Locations</option>
+        <option value="bend" {{'selected' if location_filter == 'bend' else ''}}>Bend</option>
+        <option value="eugene" {{'selected' if location_filter == 'eugene' else ''}}>Eugene</option>
+        <option value="hillsboro" {{'selected' if location_filter == 'hillsboro' else ''}}>Hillsboro</option>
+        <option value="medford" {{'selected' if location_filter == 'medford' else ''}}>Medford</option>
+        <option value="portland" {{'selected' if location_filter == 'portland' else ''}}>Portland</option>
+      </select>
+    </div>
+    
+    <div class="filter-group">
+      <label for="stock">Search by Stock Number</label>
+      <input type="text" name="stock" id="stock" placeholder="Enter stock number..." value="{{stock_filter or ''}}">
+    </div>
+    
+    <div class="filter-group">
+      <label for="sort">Sort By</label>
+      <select name="sort" id="sort">
+        <option value="date_desc" {{'selected' if sort_by == 'date_desc' else ''}}>Date (Newest First)</option>
+        <option value="date_asc" {{'selected' if sort_by == 'date_asc' else ''}}>Date (Oldest First)</option>
+        <option value="stock_asc" {{'selected' if sort_by == 'stock_asc' else ''}}>Stock (Low to High)</option>
+        <option value="stock_desc" {{'selected' if sort_by == 'stock_desc' else ''}}>Stock (High to Low)</option>
+        <option value="location" {{'selected' if sort_by == 'location' else ''}}>Location (A-Z)</option>
+      </select>
+    </div>
+    
+    <div class="filter-group" style="justify-content:flex-end">
+      <label>&nbsp;</label>
+      <button type="submit">Apply Filters</button>
+    </div>
+  </form>
+  
+  <div class="stats">
+    Showing {{captures|length}} capture(s)
+    {% if location_filter and location_filter != 'all' %} · Filtered by location: <strong>{{location_filter.title()}}</strong>{% endif %}
+    {% if stock_filter %} · Search: <strong>{{stock_filter}}</strong>{% endif %}
+  </div>
+  
   {% if captures %}
   <table>
     <thead>
@@ -248,22 +422,27 @@ def history():
       {% for capture in captures %}
       <tr>
         <td>{{capture.id}}</td>
-        <td>{{capture.stock}}</td>
-        <td>{{capture.location}}</td>
+        <td><strong>{{capture.stock}}</strong></td>
+        <td><span class="location-badge">{{capture.location}}</span></td>
         <td>{{capture.capture_utc}}</td>
         <td><code style="font-size:10px">{{capture.price_sha256[:16]}}...</code></td>
         <td><code style="font-size:10px">{{capture.payment_sha256[:16]}}...</code></td>
-        <td><a href="/view/{{capture.id}}" class="view-btn">View</a></td>
+        <td><a href="/view/{{capture.id}}" class="view-btn">View PDF</a></td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
   {% else %}
-  <div class="empty">No captures yet</div>
+  <div class="empty">
+    No captures found
+    {% if location_filter or stock_filter %}
+    <br><br><a href="/history" style="color:#2563eb">Clear filters</a>
+    {% endif %}
+  </div>
   {% endif %}
 </body>
 </html>
-    """, captures=captures)
+    """, captures=captures, location_filter=location_filter, stock_filter=stock_filter, sort_by=sort_by)
     return Response(html, mimetype="text/html")
 
 @app.get("/view/<int:capture_id>")
