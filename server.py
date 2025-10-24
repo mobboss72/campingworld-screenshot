@@ -227,7 +227,8 @@ def generate_pdf_report(pdf_data, price_png, pay_png, debug_output):
 # --- do_capture (Restored full Playwright logic) ---
 def do_capture(url, lat, lon, store_zip_code, price_png_path, pay_png_path):
     all_debug = []
-    final_url = url
+    initial_url = url # Preserve the input URL for comparison
+    final_url = initial_url
     
     try:
         with sync_playwright() as p:
@@ -244,14 +245,21 @@ def do_capture(url, lat, lon, store_zip_code, price_png_path, pay_png_path):
             page = context.new_page()
             page.set_default_timeout(45000)
             
-            all_debug.append(f"✓ Navigating to {url}...")
-            response = page.goto(url, wait_until="networkidle")
+            all_debug.append(f"✓ Navigating to {initial_url}...")
+            response = page.goto(initial_url, wait_until="networkidle")
             final_url = page.url
+            
+            # --- FIX: Log the final URL to verify redirects ---
+            if final_url != initial_url:
+                all_debug.append(f"i Redirect detected. Final URL reached: {final_url}")
+            else:
+                all_debug.append(f"✓ Final URL reached: {final_url}")
+            # ----------------------------------------------------
             
             # --- Capture Price Disclosure ---
             all_debug.append("\n--- Capturing Price Disclosure ---")
             price_png = None
-            is_pre_owned = url.lower().endswith('p') 
+            is_pre_owned = initial_url.lower().endswith('p') 
             
             if is_pre_owned:
                 all_debug.append("i Pre-Owned unit detected. Skipping Price Breakdown (no additional disclosure expected).")
@@ -372,7 +380,7 @@ def capture_rv():
         'location': location_key,
         'location_name': location_data['name'],
         'zip_code': location_data['zip'], 
-        'url': final_url,
+        'url': final_url, # Use the actual final URL
         'capture_utc': capture_utc,
         'https_date': https_date,
         'price_sha256': price_sha256,
@@ -407,8 +415,8 @@ def capture_rv():
             https_date, 
             price_sha256, 
             payment_sha256, 
-            price_png, 
-            pay_png, 
+            price_png_path if price_png else None, # Use path in temp_dir for DB
+            pay_png_path if pay_png else None, # Use path in temp_dir for DB
             price_tsa, 
             price_timestamp, 
             payment_tsa, 
