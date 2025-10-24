@@ -304,26 +304,28 @@ def do_capture(stock: str) -> Tuple[str, str, str, str]:
             return False
 
         # ---- PRICE trigger (more robust) ----
-        def find_price_trigger(page: Page) -> Optional[Locator]:
-            cands = [
-                # Icon immediately following a big price dollar amount
-                page.locator("xpath=(//*[matches(., '\\$\\s*\\d[\\d,]*(\\.\\d{2})?')])[1]/following::*[(self::*[name()='svg'] or contains(@class,'MuiSvgIcon-root') or self::button)][1]"),
-                # Any element containing 'price' with a following icon
-                page.locator("xpath=//*[contains(translate(., 'PRICE','price'),'price')]/following::*[(self::*[name()='svg'] or contains(@class,'MuiSvgIcon-root') or self::button)][1]"),
-                # Sometimes the label itself is the trigger
-                page.locator("xpath=(//*[contains(translate(., 'PRICE','price'),'price')])[1]"),
-                # Fallback: the big dollar amount node
-                page.locator("xpath=(//*[matches(., '\\$\\s*\\d[\\d,]*(\\.\\d{2})?')])[1]"),
-            ]
-            for cand in cands:
-                try:
-                    if cand.count():
-                        if cand.first.is_visible():
-                            return cand.first
-                except Exception:
-                    continue
-            return None
-
+        # Capture price hover screenshot
+        price_selector = ".MuiTypography-root.MuiTypography-subtitle1:visible"
+        price_elements = page.locator(price_selector)
+        print(f"Number of price elements found: {price_elements.count()}")
+        visible_price = None
+        for i in range(price_elements.count()):
+            elem = price_elements.nth(i)
+            if elem.is_visible():
+                visible_price = elem
+                print(f"Visible price element found at index {i}")
+                break
+        if visible_price:
+            try:
+                visible_price.scroll_into_view_if_needed(timeout=5000)
+                visible_price.hover(timeout=10000, force=True)
+                page.wait_for_timeout(1000)  # Wait for tooltip to appear
+                page.screenshot(path=price_png_path, full_page=True)
+                print(f"Price full page screenshot saved to: {price_png_path}")
+            except Exception as e:
+                print(f"Price hover failed: {e}")
+        else:
+            print("No visible price element found")
         # ---- PAYMENT trigger (text-first + neighbor icon) ----
         def find_payment_trigger(page: Page) -> Optional[Locator]:
             payment_text = None
