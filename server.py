@@ -6,39 +6,34 @@ import datetime
 import tempfile
 import traceback
 import requests
-from pathlib import Path
 
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
-# Set Playwright browsers path to a writable, persisted location under /app
+# Persist Playwright browsers in a writable location (Railway/Render/Heroku-friendly)
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 
 PORT = int(os.getenv("PORT", "8080"))
 OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
 
-# Global storage for screenshot paths (in production, use a database)
-screenshot_cache = {}
+# in-memory map of id -> file path (for demo; use real storage in prod)
+screenshot_cache: dict[str, str] = {}
 
-# Serve index.html from the repo root
 app = Flask(__name__, static_folder=None)
 
+# ---------------------------
 # Routes
+# ---------------------------
 @app.get("/")
 def root():
     return send_from_directory(".", "index.html")
 
 @app.get("/screenshot/<screenshot_id>")
-def serve_screenshot(screenshot_id):
-    """Serve a screenshot image file"""
-    if screenshot_id not in screenshot_cache:
+def serve_screenshot(screenshot_id: str):
+    path = screenshot_cache.get(screenshot_id)
+    if not path or not os.path.exists(path):
         return Response("Screenshot not found", status=404)
-    
-    file_path = screenshot_cache[screenshot_id]
-    if not os.path.exists(file_path):
-        return Response("Screenshot file not found", status=404)
-    
-    return send_file(file_path, mimetype='image/png')
+    return send_file(path, mimetype="image/png")
 
 @app.post("/capture")
 def capture():
@@ -47,18 +42,16 @@ def capture():
         if not stock.isdigit():
             return Response("Invalid stock number", status=400)
 
-        # Capture screenshots with hover states
         price_png_path, payment_png_path, url = do_capture(stock)
 
         utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
         hdate = https_date()
-        
-        # Check if files exist and get their info
+
         price_exists = os.path.exists(price_png_path)
         payment_exists = os.path.exists(payment_png_path)
-        
-        print(f"\n=== File Status ===")
-        print(f"Price screenshot exists: {price_exists}")
+
+        print("\n=== File Status ===")
+        print(f"Price screenshot exists:   {price_exists}")
         if price_exists:
             print(f"  Path: {price_png_path}")
             print(f"  Size: {os.path.getsize(price_png_path)} bytes")
@@ -66,143 +59,95 @@ def capture():
         if payment_exists:
             print(f"  Path: {payment_png_path}")
             print(f"  Size: {os.path.getsize(payment_png_path)} bytes")
-        
+
         sha_price = sha256_file(price_png_path) if price_exists else "N/A (Capture failed)"
         sha_payment = sha256_file(payment_png_path) if payment_exists else "N/A (Capture failed)"
 
-        # Store paths in cache for serving
-        price_id = f"price_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
-        payment_id = f"payment_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
-        
+        # register files for serving
+        ts = int(datetime.datetime.utcnow().timestamp())
+        price_id = f"price_{stock}_{ts}"
+        payment_id = f"payment_{stock}_{ts}"
         if price_exists:
             screenshot_cache[price_id] = price_png_path
         if payment_exists:
             screenshot_cache[payment_id] = payment_png_path
 
-        html = render_template_string('''
-            <!DOCTYPE html>
+        html = render_template_string(
+            """
+            <!doctype html>
             <html>
             <head>
-                <title>Compliance Screenshots</title>
-                <meta charset="UTF-8">
-                <style>
-                    body { 
-                        font-family: Arial, sans-serif; 
-                        margin: 20px; 
-                        background: #f5f5f5;
-                    }
-                    h2 {
-                        text-align: center;
-                        margin-bottom: 30px;
-                    }
-                    .container { 
-                        display: flex; 
-                        flex-wrap: wrap; 
-                        gap: 20px; 
-                        justify-content: center;
-                    }
-                    .image-box { 
-                        border: 2px solid #333; 
-                        padding: 15px; 
-                        background: white;
-                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                        max-width: 600px;
-                    }
-                    .image-box h3 {
-                        margin-top: 0;
-                        border-bottom: 2px solid #333;
-                        padding-bottom: 10px;
-                    }
-                    .info { 
-                        margin-top: 15px; 
-                        font-size: 0.85em;
-                        line-height: 1.6;
-                    }
-                    .info p {
-                        margin: 5px 0;
-                        word-wrap: break-word;
-                    }
-                    .error { 
-                        color: red; 
-                        font-weight: bold;
-                        padding: 20px;
-                        background: #fee;
-                        border: 1px solid red;
-                        border-radius: 4px;
-                    }
-                    .success {
-                        color: green;
-                        font-weight: bold;
-                    }
-                    img { 
-                        max-width: 100%; 
-                        height: auto; 
-                        border: 1px solid #ddd;
-                        display: block;
-                        margin: 10px 0;
-                    }
-                    .screenshot-container {
-                        min-height: 200px;
-                        background: #fafafa;
-                        padding: 10px;
-                        border-radius: 4px;
-                    }
-                </style>
+              <meta charset="utf-8" />
+              <title>Compliance Screenshots</title>
+              <style>
+                body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+                h2 { text-align: center; margin-bottom: 30px; }
+                .container { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
+                .image-box { border: 2px solid #333; padding: 15px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.1); max-width: 640px; }
+                .image-box h3 { margin-top: 0; border-bottom: 2px solid #333; padding-bottom: 10px; }
+                .info { margin-top: 15px; font-size: .85em; line-height: 1.6; }
+                .info p { margin: 5px 0; word-wrap: break-word; }
+                .error { color: #b00020; font-weight: bold; padding: 12px; background: #fee; border: 1px solid #b00020; border-radius: 4px; }
+                .success { color: #0a7d00; font-weight: bold; }
+                img { max-width: 100%; height: auto; border: 1px solid #ddd; display: block; margin: 10px 0; }
+                .screenshot-container { min-height: 200px; background: #fafafa; padding: 10px; border-radius: 4px; }
+              </style>
             </head>
             <body>
-                <h2>Camping World Proof (Compliance Capture)</h2>
-                <div class="container">
-                    <div class="image-box">
-                        <h3>Price Hover Full Page Screenshot</h3>
-                        <div class="screenshot-container">
-                            {% if price_exists %}
-                                <img src="/screenshot/{{ price_id }}" alt="Price Hover Full Page" />
-                                <p class="success">&#10003; Screenshot captured successfully</p>
-                            {% else %}
-                                <p class="error">&#10007; Failed to capture Price Hover screenshot.</p>
-                            {% endif %}
-                        </div>
-                        <div class="info">
-                            <p><strong>Stock:</strong> {{ stock }}</p>
-                            <p><strong>URL:</strong> <a href="{{ url }}" target="_blank">{{ url }}</a></p>
-                            <p><strong>UTC:</strong> {{ utc_now }}</p>
-                            <p><strong>HTTPS Date:</strong> {{ hdate or 'unavailable' }}</p>
-                            <p><strong>SHA-256:</strong> <code>{{ sha_price }}</code></p>
-                        </div>
-                    </div>
-                    <div class="image-box">
-                        <h3>Payment Hover Full Page Screenshot</h3>
-                        <div class="screenshot-container">
-                            {% if payment_exists %}
-                                <img src="/screenshot/{{ payment_id }}" alt="Payment Hover Full Page" />
-                                <p class="success">&#10003; Screenshot captured successfully</p>
-                            {% else %}
-                                <p class="error">&#10007; Failed to capture Payment Hover screenshot.</p>
-                            {% endif %}
-                        </div>
-                        <div class="info">
-                            <p><strong>Stock:</strong> {{ stock }}</p>
-                            <p><strong>URL:</strong> <a href="{{ url }}" target="_blank">{{ url }}</a></p>
-                            <p><strong>UTC:</strong> {{ utc_now }}</p>
-                            <p><strong>HTTPS Date:</strong> {{ hdate or 'unavailable' }}</p>
-                            <p><strong>SHA-256:</strong> <code>{{ sha_payment }}</code></p>
-                        </div>
-                    </div>
+              <h2>Camping World Proof (Compliance Capture)</h2>
+              <div class="container">
+                <div class="image-box">
+                  <h3>Price Hover — Full Page</h3>
+                  <div class="screenshot-container">
+                    {% if price_exists %}
+                      <img src="/screenshot/{{ price_id }}" alt="Price Hover Full Page" />
+                      <p class="success">&#10003; Screenshot captured successfully</p>
+                    {% else %}
+                      <p class="error">&#10007; Failed to capture Price Hover screenshot.</p>
+                    {% endif %}
+                  </div>
+                  <div class="info">
+                    <p><strong>Stock:</strong> {{ stock }}</p>
+                    <p><strong>URL:</strong> <a href="{{ url }}" target="_blank">{{ url }}</a></p>
+                    <p><strong>UTC:</strong> {{ utc_now }}</p>
+                    <p><strong>HTTPS Date:</strong> {{ hdate or 'unavailable' }}</p>
+                    <p><strong>SHA-256:</strong> <code>{{ sha_price }}</code></p>
+                  </div>
                 </div>
+
+                <div class="image-box">
+                  <h3>Payment Hover — Full Page</h3>
+                  <div class="screenshot-container">
+                    {% if payment_exists %}
+                      <img src="/screenshot/{{ payment_id }}" alt="Payment Hover Full Page" />
+                      <p class="success">&#10003; Screenshot captured successfully</p>
+                    {% else %}
+                      <p class="error">&#10007; Failed to capture Payment Hover screenshot.</p>
+                    {% endif %}
+                  </div>
+                  <div class="info">
+                    <p><strong>Stock:</strong> {{ stock }}</p>
+                    <p><strong>URL:</strong> <a href="{{ url }}" target="_blank">{{ url }}</a></p>
+                    <p><strong>UTC:</strong> {{ utc_now }}</p>
+                    <p><strong>HTTPS Date:</strong> {{ hdate or 'unavailable' }}</p>
+                    <p><strong>SHA-256:</strong> <code>{{ sha_payment }}</code></p>
+                  </div>
+                </div>
+              </div>
             </body>
             </html>
-        ''', 
-        stock=stock, 
-        url=url, 
-        utc_now=utc_now, 
-        hdate=hdate,
-        price_exists=price_exists,
-        payment_exists=payment_exists,
-        price_id=price_id,
-        payment_id=payment_id,
-        sha_price=sha_price,
-        sha_payment=sha_payment)
-
+            """,
+            stock=stock,
+            url=url,
+            utc_now=utc_now,
+            hdate=hdate,
+            price_exists=price_exists,
+            payment_exists=payment_exists,
+            price_id=price_id,
+            payment_id=payment_id,
+            sha_price=sha_price,
+            sha_payment=sha_payment,
+        )
         return Response(html, mimetype="text/html")
 
     except Exception as e:
@@ -210,12 +155,14 @@ def capture():
         traceback.print_exc()
         return Response(f"Error: {e}", status=500)
 
+# ---------------------------
 # Helpers
+# ---------------------------
 def sha256_file(path: str) -> str:
-    """Calculate SHA-256 hash of a file"""
     if not os.path.exists(path):
         return "N/A (File not found)"
     try:
+        import hashlib
         h = hashlib.sha256()
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -226,15 +173,16 @@ def sha256_file(path: str) -> str:
         return f"N/A (Error: {e})"
 
 def https_date() -> str | None:
-    """Get current date from HTTPS headers"""
     try:
         r = requests.head("https://cloudflare.com", timeout=8)
         return r.headers.get("Date")
     except Exception:
         return None
 
+# ---------------------------
+# Core capture logic
+# ---------------------------
 def do_capture(stock: str) -> tuple[str, str, str]:
-    """Capture price and payment hover screenshots"""
     url = f"https://rv.campingworld.com/rv/{stock}"
     tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
     price_png_path = os.path.join(tmpdir, f"cw_{stock}_price.png")
@@ -242,7 +190,7 @@ def do_capture(stock: str) -> tuple[str, str, str]:
 
     print(f"\n=== Starting capture for stock {stock} ===")
     print(f"Temp directory: {tmpdir}")
-    print(f"Price path: {price_png_path}")
+    print(f"Price path:   {price_png_path}")
     print(f"Payment path: {payment_png_path}")
 
     with sync_playwright() as p:
@@ -263,47 +211,45 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         )
         page = ctx.new_page()
 
-        # Load unit page and ensure interactivity
         print(f"Loading URL: {url}")
         page.goto(url, wait_until="domcontentloaded")
         try:
             page.wait_for_load_state("networkidle", timeout=30_000)
             print("Page loaded (networkidle)")
-        except Exception as e:
+        except PlaywrightTimeout as e:
             print(f"Load networkidle timeout: {e}")
 
-        # Set Oregon ZIP
+        # Force Oregon ZIP (used by site for pricing)
         try:
-            page.evaluate('''(zip) => {
-                try {
-                    localStorage.setItem('cw_zip', zip);
-                } catch (e) {}
-                document.cookie = 'cw_zip=' + zip + ';path=/;SameSite=Lax';
-            }''', OREGON_ZIP)
+            page.evaluate(
+                """(zip) => {
+                    try { localStorage.setItem('cw_zip', zip); } catch (e) {}
+                    document.cookie = 'cw_zip=' + zip + ';path=/;SameSite=Lax';
+                }""",
+                OREGON_ZIP,
+            )
             print(f"Set ZIP code to: {OREGON_ZIP}")
             page.reload(wait_until="domcontentloaded")
             try:
                 page.wait_for_load_state("networkidle", timeout=20_000)
-            except Exception as e:
+            except PlaywrightTimeout as e:
                 print(f"Reload networkidle timeout: {e}")
         except Exception as e:
             print(f"ZIP set failed: {e}")
 
-        # Wait for key elements
+        # Wait for price to exist
         try:
             page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", state="visible", timeout=15_000)
             print("Price element found and visible")
-        except Exception as e:
+        except PlaywrightTimeout as e:
             print(f"Price selector wait failed: {e}")
 
-        # ===== CAPTURE PRICE HOVER SCREENSHOT (WORKING - DON'T CHANGE) =====
+        # ---------- PRICE HOVER (works) ----------
         print("\n=== Capturing Price Hover ===")
-        price_selector = ".MuiTypography-root.MuiTypography-subtitle1:visible"
         try:
-            price_elements = page.locator(price_selector)
+            price_elements = page.locator(".MuiTypography-root.MuiTypography-subtitle1")
             count = price_elements.count()
             print(f"Found {count} price elements")
-            
             visible_price = None
             for i in range(count):
                 elem = price_elements.nth(i)
@@ -311,18 +257,14 @@ def do_capture(stock: str) -> tuple[str, str, str]:
                     visible_price = elem
                     print(f"Using visible price element at index {i}")
                     break
-                    
+
             if visible_price:
                 visible_price.scroll_into_view_if_needed(timeout=5000)
-                print("Scrolled to price element")
                 visible_price.hover(timeout=10000, force=True)
-                print("Hovering over price element")
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(1200)
                 page.screenshot(path=price_png_path, full_page=True)
-                
                 if os.path.exists(price_png_path):
-                    size = os.path.getsize(price_png_path)
-                    print(f"✅ Price screenshot saved: {size} bytes")
+                    print(f"✅ Price screenshot saved: {os.path.getsize(price_png_path)} bytes")
                 else:
                     print("❌ Price screenshot file not created")
             else:
@@ -331,58 +273,96 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             print(f"❌ Price hover capture failed: {e}")
             traceback.print_exc()
 
-        # ===== CAPTURE PAYMENT HOVER SCREENSHOT (MIRRORING PRICE PATTERN) =====
-        print("=== Capturing Payment Hover ===")
-payment_selector = ".MuiTypography-root.MuiTypography-subtitle2:visible"
-payment_elems = page.locator(payment_selector)
-count = payment_elems.count()
-print(f"Found {count} payment elements")
+        # ---------- PAYMENT HOVER (fixed & robust) ----------
+        print("\n=== Capturing Payment Hover ===")
+        try:
+            # Heuristics: monthly payment often shows as "$xxx/mo" or contains 'payment' text
+            payment_candidates = page.locator(
+                "css=.MuiTypography-root.MuiTypography-subtitle2, text=/\\$\\s*\\d[\\d,]*(\\.\\d{2})?\\s*\\/\\s*mo/i, text=/payment|monthly/i"
+            )
 
-visible_payment = None
-for i in range(count):
-    elem = payment_elems.nth(i)
-    if elem.is_visible():
-        txt = (elem.text_content() or "").lower()
-        # keep your text heuristics here if you have them
-        if "payment" in txt or "/mo" in txt or "monthly" in txt:
-            visible_payment = elem
-            print(f"Using payment element at index {i} with text: {txt}")
-            break
+            candidate_count = payment_candidates.count()
+            print(f"Found {candidate_count} potential payment elements")
 
-if visible_payment:
-    visible_payment.scroll_into_view_if_needed(timeout=5000)
-    print("Scrolled to payment element")
+            visible_payment = None
+            chosen_index = -1
+            for i in range(candidate_count):
+                el = payment_candidates.nth(i)
+                if el.is_visible():
+                    txt = (el.text_content() or "").strip().lower()
+                    if "payment" in txt or "/mo" in txt or "monthly" in txt:
+                        visible_payment = el
+                        chosen_index = i
+                        break
+            if not visible_payment and candidate_count > 0:
+                # fallback to first visible
+                for i in range(candidate_count):
+                    el = payment_candidates.nth(i)
+                    if el.is_visible():
+                        visible_payment = el
+                        chosen_index = i
+                        break
 
-    # If the tooltip is attached to an info icon next to the label,
-    # hover that icon instead of the text:
-    trigger = visible_payment
-    icon = visible_payment.locator("xpath=following::*[contains(@class,'MuiSvgIcon-root')][1]")
-    if icon.count() > 0:
-        trigger = icon.first
+            if not visible_payment:
+                print("❌ Payment element not found/visible")
+            else:
+                print(f"Using payment element at index {chosen_index} with text: {(visible_payment.text_content() or '').strip()}")
 
-    trigger.hover(timeout=10000, force=True)
-    print("Hovering over payment trigger")
-    
-    # Wait for the actual tooltip/popover to appear
-    tooltip = page.locator("[role=tooltip], .MuiTooltip-popper, [data-popper-placement]")
-    tooltip.wait_for(state="visible", timeout=5000)
+                # Scroll into view before hover
+                visible_payment.scroll_into_view_if_needed(timeout=5000)
 
-    # Take a full-page screenshot (like you do for price) so the floating
-    # layer is included
-    page.wait_for_timeout(500)  # small settle
-    page.screenshot(path=payment_png_path, full_page=True)
+                # Many sites attach tooltip/popover to an adjacent info icon or parent wrapper.
+                # Try a few likely triggers near the payment text:
+                trigger = None
 
-    if os.path.exists(payment_png_path):
-        print(f"✅ Payment screenshot saved: {os.path.getsize(payment_png_path)} bytes")
-    else:
-        print("❌ Payment screenshot not found after capture")
-else:
-    print("❌ Payment element not found")
+                # 1) Neighboring icon (MUI SvgIcon)
+                icon1 = visible_payment.locator("xpath=following::*[contains(@class,'MuiSvgIcon-root')][1]")
+                if icon1.count() > 0 and icon1.first.is_visible():
+                    trigger = icon1.first
+
+                # 2) Any svg/icon within the same container row
+                if trigger is None:
+                    icon2 = visible_payment.locator("xpath=ancestor::*[contains(@class,'MuiBox-root') or contains(@class,'MuiStack-root')][1]//*[contains(@class,'MuiSvgIcon-root') or name()='svg'][1]")
+                    if icon2.count() > 0 and icon2.first.is_visible():
+                        trigger = icon2.first
+
+                # 3) Fallback: use the text itself
+                if trigger is None:
+                    trigger = visible_payment
+
+                # Move mouse to center (some tooltips require a real pointer move)
+                box = trigger.bounding_box()
+                if box:
+                    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+                trigger.hover(timeout=10000, force=True)
+                print("Hovering over payment trigger")
+
+                # Wait for a tooltip/popover layer
+                tooltip = page.locator("[role='tooltip'], .MuiTooltip-popper, [data-popper-placement], .MuiPopover-root, .MuiPopper-root")
+                try:
+                    tooltip.wait_for(state="visible", timeout=5000)
+                    print("Payment tooltip/popover appeared")
+                except PlaywrightTimeout:
+                    print("⚠️ Tooltip did not appear explicitly; capturing anyway")
+
+                page.wait_for_timeout(600)  # small settle
+                page.screenshot(path=payment_png_path, full_page=True)
+
+                if os.path.exists(payment_png_path):
+                    print(f"✅ Payment screenshot saved: {os.path.getsize(payment_png_path)} bytes")
+                else:
+                    print("❌ Payment screenshot not found after capture")
+
+        except Exception as e:
+            print(f"❌ Payment hover capture failed: {e}")
+            traceback.print_exc()
 
         browser.close()
         print("\n=== Browser closed ===")
 
     return price_png_path, payment_png_path, url
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
