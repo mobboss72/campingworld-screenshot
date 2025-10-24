@@ -1,14 +1,11 @@
 # server.py
 import os
-import io
 import sys
-import zipfile
 import hashlib
 import datetime
 import tempfile
 import traceback
 import requests
-import base64
 from pathlib import Path
 
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file
@@ -160,9 +157,9 @@ def capture():
                         <div class="screenshot-container">
                             {% if price_exists %}
                                 <img src="/screenshot/{{ price_id }}" alt="Price Hover Full Page" />
-                                <p class="success">âœ“ Screenshot captured successfully</p>
+                                <p class="success">&#10003; Screenshot captured successfully</p>
                             {% else %}
-                                <p class="error">âœ— Failed to capture Price Hover screenshot.</p>
+                                <p class="error">&#10007; Failed to capture Price Hover screenshot.</p>
                             {% endif %}
                         </div>
                         <div class="info">
@@ -178,9 +175,9 @@ def capture():
                         <div class="screenshot-container">
                             {% if payment_exists %}
                                 <img src="/screenshot/{{ payment_id }}" alt="Payment Hover Full Page" />
-                                <p class="success">âœ“ Screenshot captured successfully</p>
+                                <p class="success">&#10003; Screenshot captured successfully</p>
                             {% else %}
-                                <p class="error">âœ— Failed to capture Payment Hover screenshot.</p>
+                                <p class="error">&#10007; Failed to capture Payment Hover screenshot.</p>
                             {% endif %}
                         </div>
                         <div class="info">
@@ -209,7 +206,7 @@ def capture():
         return Response(html, mimetype="text/html")
 
     except Exception as e:
-        print("âŒ /capture failed:", e, file=sys.stderr)
+        print("❌ /capture failed:", e, file=sys.stderr)
         traceback.print_exc()
         return Response(f"Error: {e}", status=500)
 
@@ -325,88 +322,51 @@ def do_capture(stock: str) -> tuple[str, str, str]:
                 
                 if os.path.exists(price_png_path):
                     size = os.path.getsize(price_png_path)
-                    print(f"âœ… Price screenshot saved: {size} bytes")
+                    print(f"✅ Price screenshot saved: {size} bytes")
                 else:
-                    print("âŒ Price screenshot file not created")
+                    print("❌ Price screenshot file not created")
             else:
-                print("âŒ No visible price element found")
+                print("❌ No visible price element found")
         except Exception as e:
-            print(f"âŒ Price hover capture failed: {e}")
+            print(f"❌ Price hover capture failed: {e}")
             traceback.print_exc()
 
-        # ===== CAPTURE PAYMENT HOVER SCREENSHOT WITH TOOLTIP DETECTION =====
+        # ===== CAPTURE PAYMENT HOVER SCREENSHOT (MIRRORING PRICE PATTERN) =====
         print("\n=== Capturing Payment Hover ===")
-        
+        payment_selector = ".MuiTypography-root.MuiTypography-subtitle2:visible"
         try:
-            # Wait a moment for page to settle after price hover
-            page.wait_for_timeout(1000)
-            
-            # Find all MuiTypography elements
-            all_typography = page.locator(".MuiTypography-root:visible")
-            count = all_typography.count()
-            print(f"Found {count} total MuiTypography elements")
+            payment_elements = page.locator(payment_selector)
+            count = payment_elements.count()
+            print(f"Found {count} payment elements with subtitle2")
             
             visible_payment = None
             for i in range(count):
-                elem = all_typography.nth(i)
-                try:
-                    if elem.is_visible():
-                        text = elem.inner_text().lower()
-                        # Look for payment-related text
-                        if 'payment' in text or '/mo' in text:
-                            print(f"Found payment element at index {i}: {text[:50]}")
-                            visible_payment = elem
-                            break
-                except:
-                    continue
-            
+                elem = payment_elements.nth(i)
+                if elem.is_visible():
+                    text = elem.inner_text().lower()
+                    # Only use elements with payment-related text
+                    if 'payment' in text or '/mo' in text or 'est.' in text:
+                        visible_payment = elem
+                        print(f"Using payment element at index {i}: {text[:50]}")
+                        break
+                    
             if visible_payment:
                 visible_payment.scroll_into_view_if_needed(timeout=5000)
                 print("Scrolled to payment element")
-                
-                # Hover and wait for tooltip to appear
                 visible_payment.hover(timeout=10000, force=True)
-                print("Hovering over payment element, waiting for tooltip...")
-                
-                # Wait for tooltip with text containing "APR" or "down" (payment breakdown indicators)
-                tooltip_appeared = False
-                try:
-                    # Check if tooltip with APR text appears
-                    page.wait_for_function('''() => {
-                        const tooltips = document.querySelectorAll('[role="tooltip"]');
-                        for (let tooltip of tooltips) {
-                            if (tooltip.textContent.includes('APR') || 
-                                tooltip.textContent.includes('down') || 
-                                tooltip.textContent.includes('Months')) {
-                                return true;
-                            }
-                        }
-                        return false;
-                    }''', timeout=5000)
-                    tooltip_appeared = True
-                    print("âœ… Payment tooltip with breakdown detected!")
-                except Exception as e:
-                    print(f"âš ï¸  Tooltip detection timed out: {e}")
-                    print("  Taking screenshot anyway...")
-                
-                # Additional wait for tooltip animation
-                page.wait_for_timeout(1500)
-                
-                # Take screenshot
+                print("Hovering over payment element")
+                page.wait_for_timeout(2000)
                 page.screenshot(path=payment_png_path, full_page=True)
                 
                 if os.path.exists(payment_png_path):
                     size = os.path.getsize(payment_png_path)
-                    print(f"âœ… Payment screenshot saved: {size} bytes")
-                    if tooltip_appeared:
-                        print("âœ… Tooltip was confirmed visible in screenshot")
+                    print(f"✅ Payment screenshot saved: {size} bytes")
                 else:
-                    print("âŒ Payment screenshot file not created")
+                    print("❌ Payment screenshot file not created")
             else:
-                print("âŒ No visible payment element found")
-                
+                print("❌ No visible payment element found")
         except Exception as e:
-            print(f"âŒ Payment hover capture failed: {e}")
+            print(f"❌ Payment hover capture failed: {e}")
             traceback.print_exc()
 
         browser.close()
