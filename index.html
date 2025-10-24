@@ -133,53 +133,6 @@
       margin-right: auto;
     }
 
-    /* Feature Cards */
-    .features {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 20px;
-      margin-bottom: 60px;
-    }
-
-    .feature-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 18px;
-      padding: 32px 28px;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-
-    .feature-card:hover {
-      transform: translateY(-4px);
-      box-shadow: var(--shadow-lg);
-      border-color: var(--accent);
-    }
-
-    .feature-icon {
-      width: 48px;
-      height: 48px;
-      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
-      border-radius: 12px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 24px;
-      margin-bottom: 20px;
-    }
-
-    .feature-card h3 {
-      font-size: 20px;
-      font-weight: 600;
-      margin-bottom: 12px;
-      letter-spacing: -0.01em;
-    }
-
-    .feature-card p {
-      font-size: 15px;
-      color: var(--text-secondary);
-      line-height: 1.5;
-    }
-
     /* Capture Form */
     .capture-section {
       background: var(--bg-card);
@@ -311,6 +264,53 @@
       to { transform: rotate(360deg); }
     }
 
+    /* Feature Cards */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-bottom: 60px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 32px 28px;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .feature-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--accent);
+    }
+
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 20px;
+    }
+
+    .feature-card h3 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      letter-spacing: -0.01em;
+    }
+
+    .feature-card p {
+      font-size: 15px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
     /* History Link */
     .history-section {
       text-align: center;
@@ -402,6 +402,21 @@
       text-align: center;
       color: var(--text-secondary);
       font-size: 13px;
+    }
+
+    .admin-link {
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      color: #9ca3af;
+      text-decoration: none;
+      margin-top: 8px;
+      display: inline-block;
+      opacity: 0.6;
+      transition: opacity 0.2s ease;
+    }
+
+    .admin-link:hover {
+      opacity: 1;
     }
 
     /* Responsive */
@@ -709,12 +724,7 @@
           Capturing screenshots and generating PDF... This may take 30-60 seconds.
         </div>
       </div>
- <div class="history-section">
-        <a href="/history" class="history-link">
-          <span>📋</span>
-          View Capture History
-        </a>
-      </div>
+
       <div class="features">
         <div class="feature-card">
           <div class="feature-icon">🔒</div>
@@ -734,6 +744,14 @@
           <p>Accurately simulates browsing from any of 5 Oregon CW locations with GPS coordinates and ZIP codes</p>
         </div>
       </div>
+
+      <div class="history-section">
+        <a href="/history" class="history-link">
+          <span>📋</span>
+          View Capture History
+        </a>
+      </div>
+
       <div class="how-it-works" id="how-it-works">
         <h2>How It Works</h2>
         <div class="steps">
@@ -765,7 +783,7 @@
             <div class="step-number">4</div>
             <div class="step-content">
               <h3>Professional PDF Generation</h3>
-              <p>The system compiles both screenshots side-by-side in a comprehensive PDF report including all metadata, timestamps, verification hashes, and capture details. The PDF automatically downloads to your computer as the permanent legal record.</p>
+              <p>The system compiles both screenshots stacked vertically in a comprehensive PDF report including all metadata, timestamps, verification hashes, and capture details. The PDF automatically downloads to your computer as the permanent legal record.</p>
             </div>
           </div>
 
@@ -773,7 +791,7 @@
             <div class="step-number">5</div>
             <div class="step-content">
               <h3>Database Audit Trail</h3>
-              <p>All capture metadata is stored in a secure database for future reference. While screenshots are automatically cleaned up after 7 days to prevent storage bloat, the audit trail with hashes and timestamps remains permanently accessible.</p>
+              <p>All capture metadata is stored in a secure database for future reference. While screenshots are automatically cleaned up after 90 days to prevent storage bloat, the audit trail with hashes and timestamps remains permanently accessible.</p>
             </div>
           </div>
         </div>
@@ -784,6 +802,8 @@
   <footer>
     <div class="container">
       © 2025 CW Compliance Tool · Internal Use Only · v4.1 · Geolocation Enabled
+      <br>
+      <a href="/admin" class="admin-link">admin</a>
     </div>
   </footer>
 
