@@ -332,42 +332,52 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             traceback.print_exc()
 
         # ===== CAPTURE PAYMENT HOVER SCREENSHOT (MIRRORING PRICE PATTERN) =====
-        print("\n=== Capturing Payment Hover ===")
-        payment_selector = ".MuiTypography-root.MuiTypography-subtitle2:visible"
-        try:
-            payment_elements = page.locator(payment_selector)
-            count = payment_elements.count()
-            print(f"Found {count} payment elements with subtitle2")
-            
-            visible_payment = None
-            for i in range(count):
-                elem = payment_elements.nth(i)
-                if elem.is_visible():
-                    text = elem.inner_text().lower()
-                    # Only use elements with payment-related text
-                    if 'payment' in text or '/mo' in text or 'est.' in text:
-                        visible_payment = elem
-                        print(f"Using payment element at index {i}: {text[:50]}")
-                        break
-                    
-            if visible_payment:
-                visible_payment.scroll_into_view_if_needed(timeout=5000)
-                print("Scrolled to payment element")
-                visible_payment.hover(timeout=10000, force=True)
-                print("Hovering over payment element")
-                page.wait_for_timeout(2000)
-                page.screenshot(path=payment_png_path, full_page=True)
-                
-                if os.path.exists(payment_png_path):
-                    size = os.path.getsize(payment_png_path)
-                    print(f"✅ Payment screenshot saved: {size} bytes")
-                else:
-                    print("❌ Payment screenshot file not created")
-            else:
-                print("❌ No visible payment element found")
-        except Exception as e:
-            print(f"❌ Payment hover capture failed: {e}")
-            traceback.print_exc()
+        print("=== Capturing Payment Hover ===")
+payment_selector = ".MuiTypography-root.MuiTypography-subtitle2:visible"
+payment_elems = page.locator(payment_selector)
+count = payment_elems.count()
+print(f"Found {count} payment elements")
+
+visible_payment = None
+for i in range(count):
+    elem = payment_elems.nth(i)
+    if elem.is_visible():
+        txt = (elem.text_content() or "").lower()
+        # keep your text heuristics here if you have them
+        if "payment" in txt or "/mo" in txt or "monthly" in txt:
+            visible_payment = elem
+            print(f"Using payment element at index {i} with text: {txt}")
+            break
+
+if visible_payment:
+    visible_payment.scroll_into_view_if_needed(timeout=5000)
+    print("Scrolled to payment element")
+
+    # If the tooltip is attached to an info icon next to the label,
+    # hover that icon instead of the text:
+    trigger = visible_payment
+    icon = visible_payment.locator("xpath=following::*[contains(@class,'MuiSvgIcon-root')][1]")
+    if icon.count() > 0:
+        trigger = icon.first
+
+    trigger.hover(timeout=10000, force=True)
+    print("Hovering over payment trigger")
+    
+    # Wait for the actual tooltip/popover to appear
+    tooltip = page.locator("[role=tooltip], .MuiTooltip-popper, [data-popper-placement]")
+    tooltip.wait_for(state="visible", timeout=5000)
+
+    # Take a full-page screenshot (like you do for price) so the floating
+    # layer is included
+    page.wait_for_timeout(500)  # small settle
+    page.screenshot(path=payment_png_path, full_page=True)
+
+    if os.path.exists(payment_png_path):
+        print(f"✅ Payment screenshot saved: {os.path.getsize(payment_png_path)} bytes")
+    else:
+        print("❌ Payment screenshot not found after capture")
+else:
+    print("❌ Payment element not found")
 
         browser.close()
         print("\n=== Browser closed ===")
