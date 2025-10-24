@@ -1,222 +1,287 @@
+# server.py
 import os
+import sys
 import hashlib
-import asyncio
-from datetime import datetime, timezone
-from flask import Flask, request, send_file, render_template_string
-from playwright.async_api import async_playwright
+import datetime
+import tempfile
+import traceback
+import requests
 
-app = Flask(__name__)
+from flask import Flask, request, send_from_directory, Response, render_template_string, send_file
+from playwright.sync_api import sync_playwright
 
-# HTML template for results
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Camping World Compliance Capture</title>
-<style>
-body { font-family: Arial, sans-serif; background-color: #f4f4f4; color: #333; }
-.container { max-width: 1200px; margin: 40px auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-h1 { color: #111; }
-h2 { color: #000; border-bottom: 2px solid #eee; padding-bottom: 5px; }
-.info { margin-bottom: 20px; }
-img { width: 100%; border-radius: 5px; }
-.status { font-weight: bold; margin-top: 10px; }
-.success { color: green; }
-.fail { color: red; }
-section { display: flex; gap: 20px; justify-content: space-between; }
-.card { flex: 1; border: 2px solid #ccc; border-radius: 8px; padding: 10px; background: #fafafa; }
-a { color: #0055cc; text-decoration: none; }
-a:hover { text-decoration: underline; }
-</style>
-</head>
-<body>
-<div class="container">
-    <h1>Camping World Compliance Capture</h1>
-    <div class="info">
-        <p><strong>Stock:</strong> {{stock}}</p>
-        <p><strong>URL:</strong> <a href="{{url}}">{{url}}</a></p>
-        <p><strong>UTC:</strong> {{utc}}</p>
-        <p><strong>HTTPS Date:</strong> {{https_date}}</p>
-    </div>
-    <section>
-        <div class="card">
-            <h2>Price Tooltip — Full Page</h2>
-            {% if price_ok %}
-                <img src="{{price_img}}" alt="Price Tooltip Screenshot">
-                <p class="status success">✔ Captured</p>
-                <p><strong>SHA-256:</strong> {{price_hash}}</p>
-            {% else %}
-                <p class="status fail">✗ Failed</p>
-                <p><strong>SHA-256:</strong> N/A</p>
-            {% endif %}
-        </div>
-        <div class="card">
-            <h2>Payment Tooltip — Full Page</h2>
-            {% if pay_ok %}
-                <img src="{{pay_img}}" alt="Payment Tooltip Screenshot">
-                <p class="status success">✔ Captured</p>
-                <p><strong>SHA-256:</strong> {{pay_hash}}</p>
-            {% else %}
-                <p class="status fail">✗ Could not capture payment tooltip.</p>
-                <p><strong>SHA-256:</strong> N/A</p>
-            {% endif %}
-        </div>
-    </section>
-</div>
-</body>
-</html>
-"""
+# Persist Playwright browser in a writable place
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 
-def sha256sum(filename):
+PORT = int(os.getenv("PORT", "8080"))
+OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
+
+# In-memory cache for serving the images back
+screenshot_cache = {}
+
+app = Flask(__name__, static_folder=None)
+
+# ----------------------------- Routes -----------------------------
+
+@app.get("/")
+def root():
+    # Serve your existing index.html (has the stock form)
+    return send_from_directory(".", "index.html")
+
+@app.get("/screenshot/<screenshot_id>")
+def serve_screenshot(screenshot_id):
+    path = screenshot_cache.get(screenshot_id)
+    if not path or not os.path.exists(path):
+        return Response("Screenshot not found", status=404)
+    return send_file(path, mimetype="image/png")
+
+@app.post("/capture")
+def capture():
+    try:
+        stock = (request.form.get("stock") or "").strip()
+        if not stock.isdigit():
+            return Response("Invalid stock number", status=400)
+
+        price_png_path, payment_png_path, url = do_capture(stock)
+
+        utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        hdate = https_date()
+
+        price_exists = os.path.exists(price_png_path) if price_png_path else False
+        payment_exists = os.path.exists(payment_png_path) if payment_png_path else False
+
+        sha_price = sha256_file(price_png_path) if price_exists else "N/A"
+        sha_payment = sha256_file(payment_png_path) if payment_exists else "N/A"
+
+        price_id = f"price_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
+        payment_id = f"payment_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
+        if price_exists: screenshot_cache[price_id] = price_png_path
+        if payment_exists: screenshot_cache[payment_id] = payment_png_path
+
+        html = render_template_string("""
+        <!doctype html>
+        <html>
+        <head>
+          <meta charset="utf-8"/>
+          <title>Camping World Compliance Capture</title>
+          <style>
+            body{font-family:Inter,Arial,sans-serif;background:#f3f4f6;color:#111;margin:0;padding:24px}
+            h1{margin:0 0 16px}
+            .meta{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px 16px;margin-bottom:18px}
+            .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+            .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px}
+            .title{font-size:20px;font-weight:700;margin:0 0 12px}
+            .ok{color:#059669;font-weight:700}
+            .bad{color:#dc2626;font-weight:700}
+            img{width:100%;height:auto;border:1px solid #e5e7eb;border-radius:8px}
+            code{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+            a{color:#2563eb;text-decoration:none} a:hover{text-decoration:underline}
+          </style>
+        </head>
+        <body>
+          <h1>Camping World Compliance Capture</h1>
+          <div class="meta">
+            <div><strong>Stock:</strong> {{stock}}</div>
+            <div><strong>URL:</strong> <a href="{{url}}" target="_blank" rel="noopener">{{url}}</a></div>
+            <div><strong>UTC:</strong> {{utc}}</div>
+            <div><strong>HTTPS Date:</strong> {{hdate or 'unavailable'}}</div>
+          </div>
+
+          <div class="grid">
+            <div class="card">
+              <div class="title">Price Tooltip — Full Page</div>
+              {% if price_exists %}
+                <img src="/screenshot/{{price_id}}" alt="Price Tooltip"/>
+                <p class="ok">✔ Captured</p>
+                <div><strong>SHA-256:</strong> <code>{{sha_price}}</code></div>
+              {% else %}
+                <p class="bad">✗ Failed</p>
+                <div><strong>SHA-256:</strong> N/A</div>
+              {% endif %}
+            </div>
+
+            <div class="card">
+              <div class="title">Payment Tooltip — Full Page</div>
+              {% if payment_exists %}
+                <img src="/screenshot/{{payment_id}}" alt="Payment Tooltip"/>
+                <p class="ok">✔ Captured</p>
+                <div><strong>SHA-256:</strong> <code>{{sha_payment}}</code></div>
+              {% else %}
+                <p class="bad">✗ Could not capture payment tooltip.</p>
+                <div><strong>SHA-256:</strong> N/A</div>
+              {% endif %}
+            </div>
+          </div>
+        </body>
+        </html>
+        """,
+        stock=stock, url=url, utc_now=utc_now, utc=utc_now, hdate=hdate,
+        price_exists=price_exists, payment_exists=payment_exists,
+        price_id=price_id, payment_id=payment_id,
+        sha_price=sha_price, sha_payment=sha_payment)
+
+        return Response(html, mimetype="text/html")
+
+    except Exception as e:
+        print("❌ /capture failed:", e, file=sys.stderr)
+        traceback.print_exc()
+        return Response(f"Error: {e}", status=500)
+
+# ---------------------------- Helpers -----------------------------
+
+def sha256_file(path: str) -> str:
+    if not path or not os.path.exists(path): return "N/A"
     h = hashlib.sha256()
-    with open(filename, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
 
-async def capture_page(stock, url):
-    folder = f"/tmp/cw-{stock.lower()}-{os.urandom(4).hex()}"
-    os.makedirs(folder, exist_ok=True)
-    price_png = os.path.join(folder, f"cw_{stock}_price.png")
-    pay_png = os.path.join(folder, f"cw_{stock}_payment.png")
+def https_date() -> str | None:
+    try:
+        r = requests.head("https://cloudflare.com", timeout=8)
+        return r.headers.get("Date")
+    except Exception:
+        return None
+
+def do_capture(stock: str) -> tuple[str | None, str | None, str]:
+    url = f"https://rv.campingworld.com/rv/{stock}"
+    tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+    price_png_path = os.path.join(tmpdir, f"cw_{stock}_price.png")
+    payment_png_path = os.path.join(tmpdir, f"cw_{stock}_payment.png")
+
     print(f"goto domcontentloaded: {url}")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+        )
+        page = browser.new_page(
+            viewport={"width": 1920, "height": 1080},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari",
+            locale="en-US",
+        )
 
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
-        page = await browser.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-        await page.wait_for_load_state("networkidle", timeout=30000)
-        print("networkidle reached")
-
-        # Inject ZIP code for financing calc
-        await page.evaluate("localStorage.setItem('cw_zip','97201')")
-        print("ZIP injected 97201")
+        page.goto(url, wait_until="domcontentloaded", timeout=45_000)
         try:
-            await page.reload(wait_until="networkidle", timeout=20000)
-            print("post-zip networkidle reached")
-        except:
-            print("ZIP injection/reload issue: Timeout 20000ms exceeded.")
+            page.wait_for_load_state("networkidle", timeout=30_000)
+            print("networkidle reached")
+        except Exception:
+            print("networkidle timeout (ignored)")
 
-        await page.add_style_tag(content="div[role='dialog'], div[class*='overlay'], div[id*='modal'] { display:none !important; }")
+        # ZIP / reload to get Oregon finance copy
+        try:
+            page.evaluate("""(zip)=>{
+                localStorage.setItem('cw_zip', zip);
+                document.cookie = 'cw_zip='+zip+';path=/;SameSite=Lax';
+            }""", OREGON_ZIP)
+            print(f"ZIP injected {OREGON_ZIP}")
+            try:
+                page.reload(wait_until="networkidle", timeout=20_000)
+                print("post-zip networkidle reached")
+            except Exception as e:
+                print("ZIP injection/reload issue:", e)
+        except Exception as e:
+            print("ZIP set failed:", e)
+
+        # Hide overlays/chat that can block hover
+        page.add_style_tag(content="""
+            [id*="intercom"], [class*="livechat"], [class*="chat"], [data-testid*="modal"],
+            [role="dialog"], .cf-overlay, .cf-powered-by, .cf-cta, .cf-overlay, .MuiBackdrop-root {
+                display: none !important;
+                visibility: hidden !important;
+                opacity: 0 !important;
+                pointer-events: none !important;
+            }
+        """)
         print("overlay-hiding CSS injected")
 
-        # ----- PRICE TOOLTIP -----
+        # -------- PRICE TOOLTIP (works) --------
         try:
-            price_locator = page.locator("text=$", has_text="$")
-            await page.wait_for_timeout(500)
-            price_candidates = await price_locator.count()
-            print(f"price candidates={price_candidates}")
-            idx = price_candidates - 1
-            price_text = price_locator.nth(idx)
-            await price_text.scroll_into_view_if_needed()
-            icon = price_text.locator("xpath=following::*[name()='svg'][1]")
-            if await icon.count() > 0:
-                trigger = icon.first
+            # Use the price label in the right rail + the adjacent info icon
+            price_block = page.locator("xpath=//*[contains(@class,'MuiTypography') and contains(normalize-space(.),'Total Price')]/ancestor::div[1] | //*[contains(@class,'MuiTypography-subtitle1')]")
+            count = price_block.count()
+            print(f"price candidates={count}")
+            idx = max(0, count - 1)
+            target = price_block.nth(idx)
+            text = (target.text_content() or "").strip()
+            print(f"price use idx={idx} text='{text}'")
+
+            target.scroll_into_view_if_needed(timeout=5000)
+
+            info_icon = target.locator("xpath=following::*[name()='svg' and contains(@class,'MuiSvgIcon-root')][1]")
+            trigger = info_icon.first if info_icon.count() > 0 else target
+            if info_icon.count() > 0:
                 print("price: using adjacent info icon")
             else:
-                trigger = price_text
                 print("price: using text as trigger")
 
-            await page.evaluate("""
-                (el)=>{
-                    for(const t of ['pointerover','mouseover','mouseenter','mousemove','focus']){
-                        el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));
-                    }
-                }
-            """, trigger)
-
-            await page.wait_for_selector("[role='tooltip']", state="visible", timeout=7000)
+            _synthetic_hover(page, trigger)
+            page.wait_for_selector("[role='tooltip'], .MuiTooltip-popper, .base-Popper-root", state="visible", timeout=8000)
             print("price tooltip appeared")
-            await page.wait_for_timeout(400)
-            await page.screenshot(path=price_png, full_page=True)
-            print(f"price screenshot saved {price_png} size={os.path.getsize(price_png)} bytes")
+            page.wait_for_timeout(400)
+            page.screenshot(path=price_png_path, full_page=True)
+            print(f"price screenshot saved {price_png_path} size={os.path.getsize(price_png_path)} bytes")
         except Exception as e:
             print("ERROR price:", e)
-            price_png = None
+            price_png_path = None
 
-        # ----- PAYMENT TOOLTIP -----
+        # -------- PAYMENT TOOLTIP (robust) --------
         try:
-            pay_text = page.locator("xpath=//*[contains(normalize-space(.), '/mo') or contains(translate(normalize-space(.),'PAYMENT','payment'))]").first
-            await pay_text.scroll_into_view_if_needed(timeout=5000)
+            anchor = page.locator(
+                "xpath=//*[contains(normalize-space(.), '/mo') or contains(translate(normalize-space(.),'PAYMENT','payment') , 'payment')]"
+            ).first
+            anchor.scroll_into_view_if_needed(timeout=5000)
+            print("payment anchor scrolled into view")
 
-            icon = pay_text.locator("xpath=following::*[name()='svg' and contains(@class,'MuiSvgIcon-root')][1]")
-            trigger = icon.first if await icon.count() > 0 else pay_text
-            await trigger.scroll_into_view_if_needed()
+            # Prefer the nearby info icon; otherwise hover the text itself
+            icon = anchor.locator("xpath=following::*[name()='svg' and contains(@class,'MuiSvgIcon-root')][1]")
+            trigger = icon.first if icon.count() > 0 else anchor
+            if icon.count() > 0:
+                print("payment: using adjacent info icon")
+            else:
+                print("payment: using text as trigger")
 
-            await page.evaluate("""
-                (el)=>{
-                    for(const t of ['pointerover','mouseover','mouseenter','mousemove','focus','pointerenter']){
-                        el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));
-                    }
-                }
-            """, trigger)
-
-            await page.wait_for_selector(
+            _synthetic_hover(page, trigger)
+            page.wait_for_selector(
                 "[role='tooltip'], .MuiTooltip-popper, .MuiTooltip-popperInteractive, .base-Popper-root",
                 state="visible",
                 timeout=8000
             )
             print("payment tooltip appeared")
-            await page.wait_for_timeout(400)
-            await page.screenshot(path=pay_png, full_page=True)
-            print(f"payment screenshot saved {pay_png} size={os.path.getsize(pay_png)} bytes")
+            page.wait_for_timeout(400)
+            page.screenshot(path=payment_png_path, full_page=True)
+            print(f"payment screenshot saved {payment_png_path} size={os.path.getsize(payment_png_path)} bytes")
         except Exception as e:
             print("ERROR payment:", e)
-            pay_png = None
+            payment_png_path = None
 
-        await browser.close()
+        browser.close()
 
-    utc_now = datetime.now(timezone.utc)
-    https_date = utc_now.strftime("%a, %d %b %Y %H:%M:%S GMT")
+        # Final log of file presence
+        if price_png_path and os.path.exists(price_png_path):
+            print(f"price file: exists ({os.path.getsize(price_png_path)} bytes)")
+        else:
+            print("price file: missing")
+        if payment_png_path and os.path.exists(payment_png_path):
+            print(f"payment file: exists ({os.path.getsize(payment_png_path)} bytes)")
+        else:
+            print("payment file: missing")
 
-    return {
-        "stock": stock,
-        "url": url,
-        "utc": utc_now.strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "https_date": https_date,
-        "price_img": price_png,
-        "pay_img": pay_png
-    }
+    return price_png_path, payment_png_path, url
 
-@app.route("/", methods=["GET"])
-def home():
-    return """
-    <form method="POST" action="/capture">
-        <label>Stock #:</label><input name="stock"><br>
-        <label>URL:</label><input name="url" size="60"><br>
-        <button type="submit">Capture</button>
-    </form>
-    """
+# Synthetic hover helper (fires multiple events so MUI tooltip opens reliably)
+def _synthetic_hover(page, element_handle):
+    page.evaluate("""
+        (el)=>{
+            const events = ['pointerover','mouseover','mouseenter','mousemove','focus','pointerenter'];
+            for(const t of events){
+                el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));
+            }
+        }
+    """, element_handle)
 
-@app.route("/capture", methods=["POST"])
-def capture():
-    stock = request.form["stock"].strip()
-    url = request.form["url"].strip()
-    result = asyncio.run(capture_page(stock, url))
-
-    price_ok = result["price_img"] and os.path.exists(result["price_img"])
-    pay_ok = result["pay_img"] and os.path.exists(result["pay_img"])
-    price_hash = sha256sum(result["price_img"]) if price_ok else None
-    pay_hash = sha256sum(result["pay_img"]) if pay_ok else None
-
-    html = render_template_string(
-        HTML_TEMPLATE,
-        stock=stock,
-        url=url,
-        utc=result["utc"],
-        https_date=result["https_date"],
-        price_ok=price_ok,
-        pay_ok=pay_ok,
-        price_img=result["price_img"],
-        pay_img=result["pay_img"],
-        price_hash=price_hash,
-        pay_hash=pay_hash
-    )
-    html_path = f"/tmp/{stock}_capture.html"
-    with open(html_path, "w") as f:
-        f.write(html)
-    return send_file(html_path, mimetype="text/html")
+# ---------------------------- Entrypoint ----------------------------
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=PORT)
