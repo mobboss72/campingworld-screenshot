@@ -695,14 +695,14 @@
 
         <div class="feature-card">
           <div class="feature-icon">📍</div>
-          <h3>Multi-Location Support</h3>
-          <p>Select from 5 Oregon locations with proper ZIP codes for accurate finance calculations</p>
+          <h3>Geolocation Spoofing</h3>
+          <p>Accurately simulates browsing from any of 5 Oregon CW locations with GPS coordinates and ZIP codes</p>
         </div>
       </div>
 
       <div class="capture-section">
         <h2>Run Capture</h2>
-        <p class="section-description">Enter a CW RV stock number to capture pricing details with legal documentation. The system will automatically screenshot price breakdowns and payment terms, then generate a timestamped PDF report.</p>
+        <p class="section-description">Enter a CW RV stock number and select your location. The system will spoof GPS coordinates and ZIP codes to match the selected CW location, then capture pricing details with full legal documentation including cryptographic timestamps.</p>
 
         <form method="POST" action="/capture" id="captureForm">
           <div class="form-group">
@@ -743,13 +743,21 @@
           <div class="step">
             <div class="step-number">1</div>
             <div class="step-content">
-              <h3>Automated Browser Capture</h3>
-              <p>Our system launches a headless browser, navigates to the CW listing, and captures full-page screenshots of pricing tooltips including the total price breakdown and estimated payment details with APR, term, and down payment information.</p>
+              <h3>Location Simulation</h3>
+              <p>Select one of 5 Oregon CW locations. The system spoofs browser geolocation with precise GPS coordinates (latitude/longitude) and injects the corresponding ZIP code. This ensures the CW website detects the correct location and displays accurate regional pricing, financing terms, and availability.</p>
             </div>
           </div>
 
           <div class="step">
             <div class="step-number">2</div>
+            <div class="step-content">
+              <h3>Automated Screenshot Capture</h3>
+              <p>A headless Chromium browser navigates to the listing and automatically triggers pricing tooltips. Full-page screenshots capture both the total price breakdown (MSRP, discounts, fees) and estimated payment details including APR, loan term, down payment, and monthly payment amount.</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">3</div>
             <div class="step-content">
               <h3>Cryptographic Timestamping</h3>
               <p>Each screenshot receives an RFC 3161 cryptographic timestamp from trusted Time Stamping Authorities (DigiCert, Apple, Starfield, or GlobalSign). This provides legally admissible proof of when the capture occurred and generates SHA-256 hashes to verify file integrity.</p>
@@ -757,7 +765,7 @@
           </div>
 
           <div class="step">
-            <div class="step-number">3</div>
+            <div class="step-number">4</div>
             <div class="step-content">
               <h3>Professional PDF Generation</h3>
               <p>The system compiles both screenshots side-by-side in a comprehensive PDF report including all metadata, timestamps, verification hashes, and capture details. The PDF automatically downloads to your computer as the permanent legal record.</p>
@@ -765,7 +773,7 @@
           </div>
 
           <div class="step">
-            <div class="step-number">4</div>
+            <div class="step-number">5</div>
             <div class="step-content">
               <h3>Database Audit Trail</h3>
               <p>All capture metadata is stored in a secure database for future reference. While screenshots are automatically cleaned up after 7 days to prevent storage bloat, the audit trail with hashes and timestamps remains permanently accessible.</p>
@@ -778,7 +786,7 @@
 
   <footer>
     <div class="container">
-      © 2025 CW Compliance Tool · Internal Use Only · v4.0
+      © 2025 CW Compliance Tool · Internal Use Only · v4.1 · Geolocation Enabled
     </div>
   </footer>
 
