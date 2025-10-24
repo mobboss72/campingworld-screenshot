@@ -314,9 +314,11 @@ def admin_storage():
 
 # -------------------- Routes --------------------
 
-@app.get("/")
-def root():
-    return send_from_directory(".", "index.html")
+# --- THIS DUPLICATE ROUTE WAS REMOVED ---
+# @app.get("/")
+# def root():
+#    return send_from_directory(".", "index.html")
+# --- END REMOVAL ---
 
 @app.get("/admin")
 @require_admin_auth
