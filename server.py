@@ -19,6 +19,11 @@ os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 PORT = int(os.getenv("PORT", "8080"))
 DB_PATH = os.getenv("DB_PATH", "/app/data/captures.db")
 
+# Storage configuration
+STORAGE_MODE = os.getenv("STORAGE_MODE", "ephemeral")  # "ephemeral" or "persistent"
+PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", "/app/data/captures")
+AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "7"))
+
 # Oregon Camping World locations (alphabetical)
 CW_LOCATIONS = {
     "bend": {"name": "Bend", "zip": "97701"},
@@ -90,6 +95,101 @@ def init_db():
         """)
 
 init_db()
+
+# -------------------- Cleanup Utilities --------------------
+
+def cleanup_old_files(days_old=7):
+    """Clean up screenshot files older than specified days"""
+    try:
+        cutoff_time = time.time() - (days_old * 24 * 60 * 60)
+        cleaned_count = 0
+        
+        # Clean up temp directories
+        temp_base = tempfile.gettempdir()
+        for item in os.listdir(temp_base):
+            if item.startswith("cw-"):
+                item_path = os.path.join(temp_base, item)
+                try:
+                    if os.path.isdir(item_path):
+                        # Check if directory is old enough
+                        dir_mtime = os.path.getmtime(item_path)
+                        if dir_mtime < cutoff_time:
+                            import shutil
+                            shutil.rmtree(item_path)
+                            cleaned_count += 1
+                            print(f"🧹 Cleaned up old directory: {item}")
+                except Exception as e:
+                    print(f"⚠ Could not clean {item_path}: {e}")
+        
+        print(f"✓ Cleanup complete: removed {cleaned_count} old directories")
+        return cleaned_count
+    except Exception as e:
+        print(f"❌ Cleanup failed: {e}")
+        return 0
+
+@app.get("/admin/cleanup")
+def admin_cleanup():
+    """Manual cleanup endpoint (protect this in production!)"""
+    # TODO: Add authentication here
+    days = request.args.get("days", 7, type=int)
+    count = cleanup_old_files(days)
+    return jsonify({"cleaned": count, "days_old": days})
+
+@app.get("/admin/storage")
+def admin_storage():
+    """View storage status"""
+    try:
+        # Count captures in database
+        with get_db() as conn:
+            total_captures = conn.execute("SELECT COUNT(*) as count FROM captures").fetchone()['count']
+            
+            # Count existing files
+            existing_pdfs = conn.execute(
+                "SELECT COUNT(*) as count FROM captures WHERE pdf_path IS NOT NULL"
+            ).fetchone()['count']
+            
+            # Check which files still exist
+            files_exist = 0
+            files_missing = 0
+            for row in conn.execute("SELECT pdf_path FROM captures WHERE pdf_path IS NOT NULL"):
+                if row['pdf_path'] and os.path.exists(row['pdf_path']):
+                    files_exist += 1
+                else:
+                    files_missing += 1
+        
+        # Calculate temp directory size
+        temp_size = 0
+        temp_dirs = 0
+        temp_base = tempfile.gettempdir()
+        for item in os.listdir(temp_base):
+            if item.startswith("cw-"):
+                item_path = os.path.join(temp_base, item)
+                if os.path.isdir(item_path):
+                    temp_dirs += 1
+                    for root, dirs, files in os.walk(item_path):
+                        for f in files:
+                            fp = os.path.join(root, f)
+                            if os.path.exists(fp):
+                                temp_size += os.path.getsize(fp)
+        
+        temp_size_mb = temp_size / (1024 * 1024)
+        
+        return jsonify({
+            "storage_mode": STORAGE_MODE,
+            "auto_cleanup_days": AUTO_CLEANUP_DAYS,
+            "database": {
+                "total_captures": total_captures,
+                "pdfs_in_db": existing_pdfs,
+                "files_exist": files_exist,
+                "files_missing": files_missing
+            },
+            "temp_storage": {
+                "directories": temp_dirs,
+                "size_mb": round(temp_size_mb, 2)
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # -------------------- Routes --------------------
 
@@ -181,12 +281,51 @@ def view_capture(capture_id: int):
     if not capture:
         return Response("Capture not found", status=404)
     
-    # Serve PDF if available
+    # Check if stored PDF exists
     if capture['pdf_path'] and os.path.exists(capture['pdf_path']):
         return send_file(capture['pdf_path'], mimetype="application/pdf", as_attachment=True,
                         download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf")
     
-    return Response("PDF not found", status=404)
+    # If PDF doesn't exist, regenerate it from screenshots (if they still exist)
+    price_path = capture['price_screenshot_path']
+    pay_path = capture['payment_screenshot_path']
+    
+    if (price_path and os.path.exists(price_path)) or (pay_path and os.path.exists(pay_path)):
+        print(f"📄 Regenerating PDF for capture {capture_id}")
+        
+        # Reconstruct RFC timestamp info if available
+        rfc_price = None
+        rfc_pay = None
+        if capture['price_tsa']:
+            rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None}
+        if capture['payment_tsa']:
+            rfc_pay = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None}
+        
+        try:
+            pdf_path = generate_pdf(
+                stock=capture['stock'],
+                location=capture['location'],
+                zip_code=capture['zip_code'],
+                url=capture['url'],
+                utc_time=capture['capture_utc'],
+                https_date=capture['https_date'],
+                price_path=price_path if os.path.exists(price_path or "") else None,
+                pay_path=pay_path if os.path.exists(pay_path or "") else None,
+                sha_price=capture['price_sha256'],
+                sha_pay=capture['payment_sha256'],
+                rfc_price=rfc_price,
+                rfc_pay=rfc_pay,
+                debug_info=capture['debug_info']
+            )
+            
+            if pdf_path and os.path.exists(pdf_path):
+                return send_file(pdf_path, mimetype="application/pdf", as_attachment=True,
+                               download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf")
+        except Exception as e:
+            print(f"❌ PDF regeneration failed: {e}")
+            traceback.print_exc()
+    
+    return Response("PDF and screenshots no longer available. Data has been cleaned up.", status=404)
 
 @app.post("/capture")
 def capture():
@@ -353,7 +492,7 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         # Metadata table
         meta_data = [
             ['Stock Number:', stock],
-            ['Location:', f"{location} (ZIP: {zip_code})"],
+            ['Selected Location:', f"{location} (ZIP: {zip_code})"],
             ['URL:', url],
             ['Capture Time (UTC):', utc_time],
             ['HTTPS Date:', https_date or 'N/A'],
@@ -370,6 +509,22 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
         story.append(meta_table)
+        story.append(Spacer(1, 0.1*inch))
+        
+        # Add note about location
+        note_style = ParagraphStyle(
+            'Note',
+            parent=styles['Normal'],
+            fontSize=9,
+            textColor=colors.HexColor('#666666'),
+            leftIndent=0,
+            rightIndent=0,
+        )
+        story.append(Paragraph(
+            f"<i>Note: ZIP code {zip_code} was injected for finance calculations. "
+            f"The location name displayed in screenshots reflects the website's own detection.</i>",
+            note_style
+        ))
         story.append(Spacer(1, 0.2*inch))
         
         # RFC 3161 Timestamps
@@ -652,7 +807,15 @@ def find_and_trigger_tooltip(page, label_text: str, tooltip_name: str):
 
 def do_capture(stock: str, zip_code: str) -> tuple[str | None, str | None, str, str]:
     url = f"https://rv.campingworld.com/rv/{stock}"
-    tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+    
+    # Choose storage location based on mode
+    if STORAGE_MODE == "persistent" and PERSISTENT_STORAGE_PATH:
+        os.makedirs(PERSISTENT_STORAGE_PATH, exist_ok=True)
+        tmpdir = os.path.join(PERSISTENT_STORAGE_PATH, f"cw-{stock}-{int(time.time())}")
+        os.makedirs(tmpdir, exist_ok=True)
+    else:
+        tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+    
     price_png = os.path.join(tmpdir, f"cw_{stock}_price.png")
     pay_png   = os.path.join(tmpdir, f"cw_{stock}_payment.png")
     
