@@ -2,41 +2,29 @@
 import os
 import sys
 import hashlib
-import datetime as dt
+import datetime
 import tempfile
 import traceback
-from pathlib import Path
-
 import requests
+
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Config
-# ──────────────────────────────────────────────────────────────────────────────
-APP_VERSION = "1.7.0"
-PORT = int(os.getenv("PORT", "8080"))
-OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
-ENABLE_TRACE = os.getenv("PLAYWRIGHT_TRACE", "0") in ("1", "true", "True")
-
-# Persist Playwright browser binaries in a writable path (Railway/Heroku-friendly)
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 
-# In-memory map of id → file path (simple cache for serving screenshots)
-screenshot_cache: dict[str, str] = {}
+PORT = int(os.getenv("PORT", "8080"))
+OREGON_ZIP = os.getenv("OREGON_ZIP", "97201")
 
+screenshot_cache = {}
 app = Flask(__name__, static_folder=None)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Routes
-# ──────────────────────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
     return send_from_directory(".", "index.html")
 
-@app.get("/screenshot/<screenshot_id>")
-def serve_screenshot(screenshot_id: str):
-    path = screenshot_cache.get(screenshot_id)
+@app.get("/screenshot/<sid>")
+def serve_shot(sid):
+    path = screenshot_cache.get(sid)
     if not path or not os.path.exists(path):
         return Response("Screenshot not found", status=404)
     return send_file(path, mimetype="image/png")
@@ -48,120 +36,101 @@ def capture():
         if not stock.isdigit():
             return Response("Invalid stock number", status=400)
 
-        price_png, payment_png, url = do_capture(stock)
+        price_png, pay_png, url = do_capture(stock)
 
-        utc_now = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        https_hdr = https_date()
+        utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        https_hdr_date = https_date()
 
-        price_exists = Path(price_png).exists()
-        pay_exists   = Path(payment_png).exists()
+        price_ok = os.path.exists(price_png)
+        pay_ok = os.path.exists(pay_png)
 
-        sha_price   = sha256_file(price_png) if price_exists else "N/A"
-        sha_payment = sha256_file(payment_png) if pay_exists   else "N/A"
+        sha_price = sha256_file(price_png) if price_ok else "N/A"
+        sha_payment = sha256_file(pay_png) if pay_ok else "N/A"
 
-        price_id = f"price_{stock}_{int(dt.datetime.utcnow().timestamp())}"
-        pay_id   = f"payment_{stock}_{int(dt.datetime.utcnow().timestamp())}"
-        if price_exists: screenshot_cache[price_id] = price_png
-        if pay_exists:   screenshot_cache[pay_id]   = payment_png
+        price_id = f"price_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
+        pay_id = f"payment_{stock}_{int(datetime.datetime.utcnow().timestamp())}"
+        if price_ok: screenshot_cache[price_id] = price_png
+        if pay_ok: screenshot_cache[pay_id] = pay_png
 
-        html = render_template_string(
-            """
-<!DOCTYPE html>
+        html = render_template_string("""
+<!doctype html>
 <html>
 <head>
-  <meta charset="utf-8"/>
-  <title>Camping World Compliance Capture</title>
-  <style>
-    :root { --card:#fff; --ink:#111; --muted:#666; --line:#ddd; --ok:#138000; --err:#b00020; --bg:#f6f7fb; }
-    body{ font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif; margin:24px; background:var(--bg); color:var(--ink);}
-    h1{ margin:0 0 16px; }
-    .meta{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:18px; }
-    .meta b{ display:inline-block; width:110px; color:#333; }
-    .grid{ display:grid; grid-template-columns: 1fr 1fr; gap:18px; }
-    .card{ background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden;}
-    .card h2{ margin:0; padding:14px 16px; border-bottom:1px solid var(--line); font-size:20px;}
-    .body{ padding:14px 16px;}
-    img{ max-width:100%; display:block; border:1px solid #eee; }
-    .ok{ color:var(--ok); font-weight:700; margin-top:8px;}
-    .err{ color:var(--err); font-weight:700; margin-top:8px;}
-    code{ background:#f0f2f5; padding:2px 6px; border-radius:6px; }
-    .sha{ margin-top:10px; color:#333;}
-    .small{ color:var(--muted); font-size:12px;}
-  </style>
+<meta charset="utf-8">
+<title>Camping World Compliance Capture</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#f5f5f7;margin:24px;}
+  h1{margin:0 0 14px;}
+  .hdr{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px 16px;margin-bottom:18px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .card{background:#fff;border:1px solid #ddd;border-radius:10px;padding:14px 16px}
+  .card h2{margin:0 0 10px}
+  .frame{border:1px solid #e5e5e5;background:#fafafa;min-height:260px;padding:10px;border-radius:8px}
+  img{max-width:100%;height:auto;display:block;border:1px solid #ddd}
+  .ok{color:#137333;font-weight:600}
+  .err{color:#b00020;font-weight:600}
+  code{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .kv{margin:2px 0}
+</style>
 </head>
 <body>
   <h1>Camping World Compliance Capture</h1>
-  <div class="meta">
-    <div><b>Stock:</b> {{stock}}</div>
-    <div><b>URL:</b> <a href="{{url}}" target="_blank" rel="noopener">{{url}}</a></div>
-    <div><b>UTC:</b> {{utc}}</div>
-    <div><b>HTTPS Date:</b> {{https or 'unavailable'}}</div>
-    <div class="small">App v{{version}}</div>
+  <div class="hdr">
+    <div class="kv"><strong>Stock:</strong> {{stock}}</div>
+    <div class="kv"><strong>URL:</strong> <a href="{{url}}" target="_blank">{{url}}</a></div>
+    <div class="kv"><strong>UTC:</strong> {{utc_now}}</div>
+    <div class="kv"><strong>HTTPS Date:</strong> {{https_hdr_date or 'unavailable'}}</div>
   </div>
 
   <div class="grid">
     <div class="card">
       <h2>Price Tooltip — Full Page</h2>
-      <div class="body">
-        {% if price_exists %}
-          <img src="/screenshot/{{price_id}}" alt="Price tooltip full page"/>
-          <div class="ok">✓ Captured</div>
-          <div class="sha"><b>SHA-256:</b> <code>{{sha_price}}</code></div>
+      <div class="frame">
+        {% if price_ok %}
+          <img src="/screenshot/{{price_id}}" alt="Price tooltip">
+          <div class="ok">✔ Captured</div>
         {% else %}
           <div class="err">✗ Could not capture price tooltip.</div>
-          <div class="sha"><b>SHA-256:</b> <code>{{sha_price}}</code></div>
         {% endif %}
       </div>
+      <div class="kv"><strong>SHA-256:</strong> <code>{{sha_price}}</code></div>
     </div>
 
     <div class="card">
       <h2>Payment Tooltip — Full Page</h2>
-      <div class="body">
-        {% if pay_exists %}
-          <img src="/screenshot/{{pay_id}}" alt="Payment tooltip full page"/>
-          <div class="ok">✓ Captured</div>
-          <div class="sha"><b>SHA-256:</b> <code>{{sha_payment}}</code></div>
+      <div class="frame">
+        {% if pay_ok %}
+          <img src="/screenshot/{{pay_id}}" alt="Payment tooltip">
+          <div class="ok">✔ Captured</div>
         {% else %}
           <div class="err">✗ Could not capture payment tooltip.</div>
-          <div class="sha"><b>SHA-256:</b> <code>{{sha_payment}}</code></div>
         {% endif %}
       </div>
+      <div class="kv"><strong>SHA-256:</strong> <code>{{sha_payment}}</code></div>
     </div>
   </div>
 </body>
 </html>
-            """,
-            stock=stock,
-            url=url,
-            utc=utc_now,
-            https=https_hdr,
-            version=APP_VERSION,
-            price_exists=price_exists,
-            pay_exists=pay_exists,
-            price_id=price_id,
-            pay_id=pay_id,
-            sha_price=sha_price,
-            sha_payment=sha_payment,
-        )
-        return Response(html, mimetype="text/html")
+        """, stock=stock, url=url, utc_now=utc_now, https_hdr_date=https_hdr_date,
+           price_ok=price_ok, pay_ok=pay_ok, price_id=price_id, pay_id=pay_id,
+           sha_price=sha_price, sha_payment=sha_payment)
 
+        return Response(html, mimetype="text/html")
     except Exception as e:
         print("❌ /capture failed:", e, file=sys.stderr)
         traceback.print_exc()
         return Response(f"Error: {e}", status=500)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------- helpers ----------
+
 def sha256_file(path: str) -> str:
-    try:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except Exception:
+    if not os.path.exists(path):
         return "N/A"
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 def https_date() -> str | None:
     try:
@@ -170,221 +139,172 @@ def https_date() -> str | None:
     except Exception:
         return None
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Core capture
-# ──────────────────────────────────────────────────────────────────────────────
+# ---------- core capture ----------
+
 def do_capture(stock: str) -> tuple[str, str, str]:
     url = f"https://rv.campingworld.com/rv/{stock}"
-    tmp = Path(tempfile.mkdtemp(prefix=f"cw-{stock}-"))
-    price_png   = str(tmp / f"cw_{stock}_price.png")
-    payment_png = str(tmp / f"cw_{stock}_payment.png")
+    tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+    price_png = os.path.join(tmpdir, f"cw_{stock}_price.png")
+    pay_png = os.path.join(tmpdir, f"cw_{stock}_payment.png")
 
-    print(f"\n--- capture {stock} ---")
-    print(f"goto domcontentloaded: {url}")
-
+    print(f"\n==> goto domcontentloaded: {url}")
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+            args=["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage"]
         )
         ctx = browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            locale="en-US",
-            geolocation={"latitude": 45.5122, "longitude": -122.6587},
+            viewport={"width":1920,"height":1080},
+            geolocation={"latitude":45.5122,"longitude":-122.6587},
             permissions=["geolocation"],
-            user_agent="Mozilla/5.0 Chrome",
+            locale="en-US",
+            user_agent="Mozilla/5.0 Chrome"
         )
         page = ctx.new_page()
-
-        # Optional tracing (set PLAYWRIGHT_TRACE=1)
-        if ENABLE_TRACE:
-            ctx.tracing.start(screenshots=True, snapshots=True, sources=True)
 
         page.goto(url, wait_until="domcontentloaded")
         try:
             page.wait_for_load_state("networkidle", timeout=30_000)
             print("networkidle reached")
-        except PWTimeout:
+        except Exception:
             print("networkidle timeout (ignored)")
 
-        # Force Oregon zip; some pages don’t refetch XHR on reload reliably, so ignore timeout
+        # Force Oregon ZIP (best-effort)
         try:
-            page.evaluate(
-                """(zip) => {
-                   try { localStorage.setItem('cw_zip', String(zip)); } catch {}
-                   document.cookie = 'cw_zip='+String(zip)+';path=/;SameSite=Lax';
-                }""",
-                OREGON_ZIP,
-            )
+            page.evaluate("""(zip)=>{try{localStorage.setItem('cw_zip',zip)}catch(_){};document.cookie='cw_zip='+zip+';path=/;SameSite=Lax';}""", OREGON_ZIP)
             print(f"ZIP injected {OREGON_ZIP}")
-            page.reload(wait_until="load")
-            page.wait_for_load_state("networkidle", timeout=20_000)
-            print("post-zip networkidle reached")
-        except Exception as e:
-            print(f"ZIP injection/reload issue: {e}\n=========================== logs ===========================")
-            print('"load" event fired')
-            print("============================================================")
-
-        # Hide sticky overlays that can obscure tooltips
-        inject_overlay_hider(page)
-
-        # PRICE TOOLTIP (known-good path)
-        try:
-            capture_price_tooltip(page, price_png)
-        except Exception:
-            print("❌ price capture block failed:")
-            traceback.print_exc()
-
-        # PAYMENT TOOLTIP (robust search for the little “i” near /mo or payment text)
-        try:
-            capture_payment_tooltip(page, payment_png)
-        except Exception:
-            print("❌ payment capture block failed:")
-            traceback.print_exc()
-
-        # finalize trace
-        if ENABLE_TRACE:
-            trace_path = str(tmp / "trace.zip")
+            page.reload(wait_until="domcontentloaded")
             try:
-                ctx.tracing.stop(path=trace_path)
-                print(f"trace saved: {trace_path}")
+                page.wait_for_load_state("networkidle", timeout=20_000)
+                print("post-zip networkidle reached")
             except Exception as e:
-                print(f"trace stop error: {e}")
+                print(f"ZIP injection/reload issue: {e}")
+        except Exception as e:
+            print(f"ZIP script error: {e}")
+
+        # Hide overlays (chat, recaptcha, convertflow)
+        try:
+            page.add_style_tag(content="""
+              [id*="drift-widget"], iframe[src*="drift"], #hubspot-messages-iframe-container,
+              [class*="intercom"], [id*="freshchat"], [data-testid="chat-widget"],
+              .grecaptcha-badge,
+              .convertflow-cta, .cf-overlay, [id^="cta"], [id*="cf-"] {
+                display:none !important; visibility:hidden !important; pointer-events:none !important;
+              }
+            """)
+            print("overlay-hiding CSS injected")
+        except Exception:
+            pass
+
+        # ----- PRICE (kept as the working variant) -----
+        try:
+            try:
+                page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", timeout=8_000)
+            except Exception:
+                print("price subtitle1 wait timeout (continue)")
+
+            cand = page.locator(".MuiTypography-root.MuiTypography-subtitle1")
+            cnt = cand.count()
+            print(f"price candidates={cnt}")
+
+            visible_price = None
+            for i in range(cnt):
+                e = cand.nth(i)
+                if e.is_visible():
+                    visible_price = e
+                    txt = (e.text_content() or "").strip()
+                    print(f"price use idx={i} text='{txt}'")
+                    break
+
+            if visible_price:
+                icon = visible_price.locator("xpath=following::*[name()='svg' and contains(@class,'MuiSvgIcon-root')][1]")
+                trigger = icon.first if icon.count() > 0 else visible_price
+                if icon.count() > 0:
+                    print("price: using adjacent info icon")
+                trigger.scroll_into_view_if_needed(timeout=5000)
+                trigger.hover(timeout=10_000, force=True)
+                page.wait_for_selector("[role='tooltip'].MuiTooltip-popper, .MuiTooltip-popper", state="visible", timeout=5_000)
+                print("price tooltip appeared")
+                page.wait_for_timeout(350)
+                page.screenshot(path=price_png, full_page=True)
+                print(f"price screenshot saved {price_png} size={os.path.getsize(price_png)} bytes")
+        except Exception as e:
+            print(f"ERROR price: {e}")
+
+        # ----- PAYMENT (geometry-nearest Info icon) -----
+        try:
+            pay_anchor = page.locator(
+                "xpath=//*[contains(normalize-space(.), '/mo') "
+                "or contains(translate(normalize-space(.),'PAYMENT','payment'),'payment') "
+                "or contains(translate(normalize-space(.),'MONTH','month'),'month')]"
+            ).first
+            print("payment anchor via /mo|payment|month")
+
+            if not pay_anchor or pay_anchor.count() == 0:
+                raise RuntimeError("payment anchor not found")
+
+            pay_anchor.scroll_into_view_if_needed(timeout=5000)
+            print("payment anchor scrolled into view")
+
+            # Find nearest info icon by distance to anchor (ElementHandle, not Locator)
+            anchor_handle = pay_anchor.element_handle()
+            icon_handle = page.evaluate_handle("""
+                (anchor) => {
+                  const rectA = anchor.getBoundingClientRect();
+                  const icons = Array.from(document.querySelectorAll('svg.MuiSvgIcon-root'));
+                  if (!icons.length) return null;
+                  let best = null, bestD = Infinity;
+                  const ax = rectA.left + rectA.width/2, ay = rectA.top + rectA.height/2;
+                  for (const s of icons) {
+                    const r = s.getBoundingClientRect();
+                    const cx = r.left + r.width/2, cy = r.top + r.height/2;
+                    const d = Math.hypot(cx-ax, cy-ay);
+                    // prefer icons visually on the same horizontal band near the anchor text
+                    const bandPenalty = Math.abs((r.top + r.bottom)/2 - ay) * 0.2;
+                    const score = d + bandPenalty;
+                    if (score < bestD) { bestD = score; best = s; }
+                  }
+                  return best;
+                }
+            """, anchor_handle)
+
+            trigger_handle = icon_handle or anchor_handle  # fallback to text
+
+            # Open tooltip: hover → synthetic events → focus
+            try:
+                trigger_handle.hover(force=True, timeout=10_000)
+            except Exception:
+                pass
+
+            page.wait_for_timeout(120)
+            try:
+                page.evaluate("""(el) => {
+                  for (const type of ['pointerover','mouseover','mouseenter','pointermove']) {
+                    el.dispatchEvent(new MouseEvent(type, {bubbles:true,cancelable:true,view:window}));
+                  }
+                }""", trigger_handle)
+            except Exception:
+                pass
+
+            try:
+                trigger_handle.focus()
+            except Exception:
+                pass
+
+            page.wait_for_selector("[role='tooltip'].MuiTooltip-popper, .MuiTooltip-popper", state="visible", timeout=4_000)
+            print("payment tooltip appeared")
+            page.wait_for_timeout(350)
+            page.screenshot(path=pay_png, full_page=True)
+            print(f"payment screenshot saved {pay_png} size={os.path.getsize(pay_png)} bytes")
+        except Exception as e:
+            print(f"ERROR payment: {e}")
+
+        print(f"price file: {'exists' if os.path.exists(price_png) else 'missing'} ({os.path.getsize(price_png) if os.path.exists(price_png) else 'n/a'} bytes)")
+        print(f"payment file: {'exists' if os.path.exists(pay_png) else 'missing'} ({os.path.getsize(pay_png) if os.path.exists(pay_png) else 'n/a'})")
 
         browser.close()
 
-    print(f"price file: {'exists' if Path(price_png).exists() else 'missing'} "
-          f"({Path(price_png).stat().st_size if Path(price_png).exists() else 'n/a'} bytes)")
-    print(f"payment file: {'exists' if Path(payment_png).exists() else 'missing'} "
-          f"({Path(payment_png).stat().st_size if Path(payment_png).exists() else 'n/a'} bytes)")
-    return price_png, payment_png, url
+    return price_png, pay_png, url
 
-# ──────────────────────────────────────────────────────────────────────────────
-# DOM helpers & capture routines
-# ──────────────────────────────────────────────────────────────────────────────
-def inject_overlay_hider(page):
-    css = """
-    /* keep tooltips visible; nuke sticky overlays that can cover them */
-    .intercom-lightweight-app, .intercom-launcher, [id*="chat"], [class*="chat"], [class*="cookie"], [class*="gdpr"],
-    .ReactModalPortal, .ReactModal__Overlay, .grecaptcha-badge { display:none !important; visibility:hidden !important; }
-    """
-    page.add_style_tag(content=css)
-    print("overlay-hiding CSS injected")
-
-def wait_for_tooltip(page, timeout_ms=5000):
-    sel = "[role='tooltip'], .MuiTooltip-popper, .MuiTooltip-popperInteractive, .base-Popper-root.MuiTooltip-popper"
-    page.wait_for_selector(sel, state="visible", timeout=timeout_ms)
-
-def capture_price_tooltip(page, out_path: str):
-    # Wait for price row (don’t fail hard if it times out)
-    try:
-        page.wait_for_selector(".MuiTypography-root.MuiTypography-subtitle1", state="visible", timeout=15_000)
-    except PWTimeout:
-        print("price subtitle1 wait timeout (continue)")
-
-    price_sel = ".MuiTypography-root.MuiTypography-subtitle1:visible"
-    price_elems = page.locator(price_sel)
-    count = max(0, min(8, price_elems.count()))
-    print(f"price candidates={count}")
-
-    visible = None
-    pick_idx = -1
-    for i in range(count):
-        el = price_elems.nth(i)
-        if not el.is_visible():
-            continue
-        txt = (el.text_content() or "").strip()
-        if "$" in txt:
-            visible, pick_idx = el, i
-            break
-        if visible is None:
-            visible, pick_idx = el, i
-    if not visible:
-        print("no visible price element found")
-        return
-
-    print(f"price use idx={pick_idx} text='{(visible.text_content() or '').strip()}'")
-
-    # Prefer the little info icon next to the price if present
-    icon = visible.locator("xpath=following::*[contains(@class,'MuiSvgIcon') or contains(@data-testid,'Info')][1]")
-    trigger = icon.first if icon.count() > 0 else visible
-    if icon.count() > 0:
-        print("price: using adjacent info icon")
-
-    trigger.scroll_into_view_if_needed(timeout=5000)
-    trigger.hover(timeout=10_000, force=True)
-    wait_for_tooltip(page, timeout_ms=5_000)
-    print("price tooltip appeared")
-    page.wait_for_timeout(400)
-    page.screenshot(path=out_path, full_page=True)
-    print(f"price screenshot saved {out_path} size={Path(out_path).stat().st_size} bytes")
-
-def capture_payment_tooltip(page, out_path: str):
-    # Anchor text that hints “payment” block
-    xp = (
-        "xpath=//*[contains(normalize-space(.), '/mo') or "
-        "contains(translate(normalize-space(.),'PAYMENT','payment'),'payment') or "
-        "contains(translate(normalize-space(.),'MONTH','month'),'month')]"
-    )
-    anchor = page.locator(xp).first
-    print("payment anchor via", xp)
-    if anchor.count() == 0:
-        print("payment: no anchor text found")
-        return
-
-    anchor.scroll_into_view_if_needed(timeout=5000)
-    print("payment anchor scrolled into view")
-
-    # Look for the “i” info icon close to the anchor
-    proximity_icon = anchor.locator(
-        "xpath=(following::*[self::svg or contains(@class,'MuiSvgIcon') or contains(@data-testid,'Info')][1] | "
-        "preceding::*[self::svg or contains(@class,'MuiSvgIcon') or contains(@data-testid,'Info')][1])"
-    )
-    info_cluster = page.locator("css=span[aria-describedby*='mui'], [aria-label*='info i'], [role='img'][class*='Info']")
-    icon = None
-    if proximity_icon.count() > 0:
-        icon = proximity_icon.first
-        print("payment: using proximity trigger (aria-describedby/info-nearby)")
-    else:
-        # Fallback: scan all visible info icons and pick one whose nearest text includes /mo or payment
-        candidates = page.locator("css=svg[data-testid*='Info'], svg[class*='InfoOutlinedIcon'], [aria-label*='info']")
-        n = min(15, candidates.count())
-        picked_idx = -1
-        for i in range(n):
-            c = candidates.nth(i)
-            if not c.is_visible():
-                continue
-            txt = (c.locator("xpath=ancestor::*[self::div or self::span][1]").text_content() or "").lower()
-            if "/mo" in txt or "payment" in txt or "month" in txt:
-                picked_idx = i
-                icon = c
-                break
-        if icon is not None:
-            print(f"payment: chose global info icon idx={picked_idx}")
-    trigger = icon if icon is not None and icon.count() > 0 else anchor
-    if icon is None or icon.count() == 0:
-        print("payment: no icon trigger found; using text as trigger")
-
-    # Hover in a small offset toward the icon’s center if possible
-    try:
-        box = trigger.bounding_box()
-        if box:
-            trigger.hover(position={"x": max(2, int(box["width"] * 0.6)), "y": int(box["height"] // 2)}, force=True, timeout=10_000)
-        else:
-            trigger.hover(force=True, timeout=10_000)
-    except PWTimeout:
-        trigger.hover(force=True, timeout=10_000)
-
-    # Wait for a real MUI tooltip (role=tooltip / popper)
-    try:
-        wait_for_tooltip(page, timeout_ms=5_000)
-        print("payment tooltip appeared")
-        page.wait_for_timeout(450)
-        page.screenshot(path=out_path, full_page=True)
-        print(f"payment screenshot saved {out_path} size={Path(out_path).stat().st_size} bytes")
-    except PWTimeout:
-        print("payment: tooltip never appeared")
-
-# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
