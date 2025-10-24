@@ -7,7 +7,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, PageBreak, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, PageBreak
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from PIL import Image as PILImage
 import sqlite3
@@ -406,7 +406,178 @@ def admin_dashboard():
   </style>
 </head>
 <body>
-  <!-- trimmed for brevity in this HTML block -->
+  <div class="container">
+    <header>
+      <h1>🔐 Admin Dashboard</h1>
+      <p>CW Compliance Capture Tool - System Overview</p>
+    </header>
+
+    <div style="margin-bottom: 16px;">
+      <a href="/" class="back-link">← Back to Main Site</a>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <h3>Total Captures</h3>
+        <div class="value">{{total_captures}}</div>
+        <div class="subvalue">All time</div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Storage Used</h3>
+        <div class="value">{{total_size_mb|round(2)}} MB</div>
+        <div class="subvalue">{{usage_percent|round(1)}}% of estimated max</div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {{usage_percent if usage_percent < 100 else 100}}%"></div>
+        </div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Storage Mode</h3>
+        <div class="value" style="font-size: 20px;">{{storage_mode.upper()}}</div>
+        <div class="subvalue">{{cleanup_days}} day retention</div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Estimated Max</h3>
+        <div class="value">{{estimated_max_mb|round(0)|int}} MB</div>
+        <div class="subvalue">270 captures @ 5MB each</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>📊 Captures by Location</h2>
+      {% if location_stats %}
+        <table>
+          <thead>
+            <tr>
+              <th>Location</th>
+              <th>Capture Count</th>
+              <th>Percentage</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for loc in location_stats %}
+            <tr>
+              <td><span class="location-badge">{{loc.location}}</span></td>
+              <td>{{loc.count}}</td>
+              <td>{{(loc.count / total_captures * 100)|round(1)}}%</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #6b7280;">No captures yet</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2>📅 Daily Activity (Last 30 Days)</h2>
+      {% if daily_stats %}
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Captures</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for day in daily_stats[:10] %}
+            <tr>
+              <td>{{day.date}}</td>
+              <td>{{day.count}}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #6b7280;">No recent activity</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2>🕐 Recent Captures</h2>
+      {% if recent_captures %}
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Stock</th>
+              <th>Location</th>
+              <th>Capture Time</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for capture in recent_captures[:10] %}
+            <tr>
+              <td>{{capture.id}}</td>
+              <td><strong>{{capture.stock}}</strong></td>
+              <td><span class="location-badge">{{capture.location}}</span></td>
+              <td>{{capture.capture_utc}}</td>
+              <td><a href="/view/{{capture.id}}" class="btn" style="padding: 6px 12px; font-size: 12px;">View PDF</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #6b7280;">No captures yet</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2>🧹 Maintenance Actions</h2>
+      <p style="color: #6b7280; margin-bottom: 16px;">Manage storage and cleanup operations</p>
+      <div class="actions">
+        <button onclick="runCleanup()" class="btn btn-secondary">Run Cleanup Now</button>
+        <a href="/admin/storage" class="btn btn-secondary" target="_blank">View Storage API</a>
+        <a href="/history" class="btn">View All Captures</a>
+      </div>
+      <div id="cleanupResult" style="margin-top: 16px; padding: 12px; background: #f3f4f6; border-radius: 8px; display: none;"></div>
+    </div>
+
+    <div class="section">
+      <h2>⚙️ System Configuration</h2>
+      <table>
+        <tr>
+          <td><strong>Storage Mode</strong></td>
+          <td>{{storage_mode}}</td>
+        </tr>
+        <tr>
+          <td><strong>Auto Cleanup Days</strong></td>
+          <td>{{cleanup_days}} days</td>
+        </tr>
+        <tr>
+          <td><strong>Database Path</strong></td>
+          <td><code>{{db_path}}</code></td>
+        </tr>
+        <tr>
+          <td><strong>Persistent Storage Path</strong></td>
+          <td><code>{{storage_path}}</code></td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    async function runCleanup() {
+      const result = document.getElementById('cleanupResult');
+      result.style.display = 'block';
+      result.innerHTML = '⏳ Running cleanup...';
+      
+      try {
+        const response = await fetch('/admin/cleanup?days={{cleanup_days}}');
+        const data = await response.json();
+        result.innerHTML = `✅ Cleanup complete: Removed ${data.cleaned} directories, freed ${data.size_mb} MB`;
+        result.style.background = '#d1fae5';
+        result.style.color = '#065f46';
+      } catch (error) {
+        result.innerHTML = `❌ Cleanup failed: ${error.message}`;
+        result.style.background = '#fee2e2';
+        result.style.color = '#991b1b';
+      }
+    }
+  </script>
 </body>
 </html>
         """, 
@@ -441,40 +612,344 @@ def serve_shot(sid):
 
 @app.get("/history")
 def history():
-    # ... (unchanged for brevity; your original history route code remains intact)
-    # keep your existing history HTML/template exactly as before
-    # [SNIP — unchanged code from your message]
-    # -------------------------------------------------------------------------
-    # For space, not repeating here — keep your original /history function body
-    # -------------------------------------------------------------------------
-    pass  # <-- replace this 'pass' with your original /history function body
+    # Get filter parameters
+    location_filter = request.args.get("location", "").strip()
+    stock_filter = request.args.get("stock", "").strip()
+    sort_by = request.args.get("sort", "date_desc")
+    
+    with get_db() as conn:
+        query = "SELECT id, stock, location, capture_utc, price_sha256, payment_sha256 FROM captures WHERE 1=1"
+        params = []
+        
+        # Apply filters
+        if location_filter and location_filter.lower() != "all":
+            # Match against the capitalized location name (e.g., "Portland", "Bend")
+            location_name = location_filter.capitalize()
+            query += " AND location = ?"
+            params.append(location_name)
+        
+        if stock_filter:
+            query += " AND stock LIKE ?"
+            params.append(f"%{stock_filter}%")
+        
+        # Apply sorting
+        if sort_by == "date_asc":
+            query += " ORDER BY created_at ASC"
+        elif sort_by == "stock_asc":
+            query += " ORDER BY stock ASC"
+        elif sort_by == "stock_desc":
+            query += " ORDER BY stock DESC"
+        elif sort_by == "location":
+            query += " ORDER BY location ASC, created_at DESC"
+        else:  # date_desc (default)
+            query += " ORDER BY created_at DESC"
+        
+        query += " LIMIT 100"
+        
+        captures = conn.execute(query, params).fetchall()
+    
+    html = render_template_string("""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Capture History</title>
+  <style>
+    body{font-family:Inter,Arial,sans-serif;background:#f3f4f6;margin:0;padding:24px;color:#111}
+    h1{margin:0 0 16px}
+    .back{display:inline-block;margin-bottom:16px;color:#2563eb;text-decoration:none;font-weight:600}
+    .back:hover{text-decoration:underline}
+    .filters{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+    .filter-group{display:flex;flex-direction:column;gap:6px}
+    .filter-group label{font-size:13px;font-weight:600;color:#374151}
+    .filter-group select,.filter-group input{padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:14px}
+    .filter-group button{background:#2563eb;color:#fff;padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-weight:600}
+    .filter-group button:hover{background:#1d4ed8}
+    .stats{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:14px;color:#6b7280}
+    table{width:100%;background:#fff;border-collapse:collapse;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
+    th{background:#2563eb;color:#fff;padding:12px;text-align:left;font-weight:600;font-size:13px}
+    td{padding:12px;border-bottom:1px solid #e5e7eb;font-size:14px}
+    tr:last-child td{border-bottom:none}
+    tr:hover{background:#f9fafb}
+    .view-btn{background:#2563eb;color:#fff;padding:6px 12px;border-radius:4px;text-decoration:none;font-size:13px;display:inline-block}
+    .view-btn:hover{background:#1d4ed8}
+    .empty{text-align:center;padding:40px;color:#666;background:#fff;border-radius:8px}
+    .location-badge{display:inline-block;padding:4px 8px;background:#e0e7ff;color:#3730a3;border-radius:4px;font-size:12px;font-weight:600}
+    @media(max-width:768px){
+      .filters{grid-template-columns:1fr}
+      table{font-size:12px}
+      th,td{padding:8px}
+    }
+  </style>
+</head>
+<body>
+  <a href="/" class="back">← Back to Capture Tool</a>
+  <h1>Capture History</h1>
+  
+  <form method="GET" action="/history" class="filters">
+    <div class="filter-group">
+      <label for="stock">Search by Stock Number</label>
+      <input type="text" name="stock" id="stock" placeholder="Enter stock number..." value="{{stock_filter or ''}}">
+    </div>
+    
+    <div class="filter-group">
+      <label for="location">Filter by Location</label>
+      <select name="location" id="location">
+        <option value="all" {{'selected' if not location_filter or location_filter.lower() == 'all' else ''}}>All Locations</option>
+        <option value="bend" {{'selected' if location_filter.lower() == 'bend' else ''}}>Bend</option>
+        <option value="eugene" {{'selected' if location_filter.lower() == 'eugene' else ''}}>Eugene</option>
+        <option value="hillsboro" {{'selected' if location_filter.lower() == 'hillsboro' else ''}}>Hillsboro</option>
+        <option value="medford" {{'selected' if location_filter.lower() == 'medford' else ''}}>Medford</option>
+        <option value="portland" {{'selected' if location_filter.lower() == 'portland' else ''}}>Portland</option>
+      </select>
+    </div>
+    
+    <div class="filter-group">
+      <label for="sort">Sort By</label>
+      <select name="sort" id="sort">
+        <option value="date_desc" {{'selected' if sort_by == 'date_desc' else ''}}>Date (Newest First)</option>
+        <option value="date_asc" {{'selected' if sort_by == 'date_asc' else ''}}>Date (Oldest First)</option>
+        <option value="stock_asc" {{'selected' if sort_by == 'stock_asc' else ''}}>Stock (Low to High)</option>
+        <option value="stock_desc" {{'selected' if sort_by == 'stock_desc' else ''}}>Stock (High to Low)</option>
+        <option value="location" {{'selected' if sort_by == 'location' else ''}}>Location (A-Z)</option>
+      </select>
+    </div>
+    
+    <div class="filter-group" style="justify-content:flex-end;display:flex;gap:8px">
+      <label>&nbsp;</label>
+      <div style="display:flex;gap:8px">
+        <button type="submit" style="background:#2563eb">Apply Filters</button>
+        <a href="/history" style="background:#6b7280;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-flex;align-items:center">Reset</a>
+      </div>
+    </div>
+  </form>
+  
+  <div class="stats">
+    Showing {{captures|length}} capture(s)
+    {% if location_filter and location_filter.lower() != 'all' %} · Filtered by location: <strong>{{location_filter.capitalize()}}</strong>{% endif %}
+    {% if stock_filter %} · Search: <strong>{{stock_filter}}</strong>{% endif %}
+  </div>
+  
+  {% if captures %}
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Stock</th>
+        <th>Location</th>
+        <th>Capture Time (UTC)</th>
+        <th>Price Hash</th>
+        <th>Payment Hash</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for capture in captures %}
+      <tr>
+        <td>{{capture.id}}</td>
+        <td><strong>{{capture.stock}}</strong></td>
+        <td><span class="location-badge">{{capture.location}}</span></td>
+        <td>{{capture.capture_utc}}</td>
+        <td><code style="font-size:10px">{{capture.price_sha256[:16]}}...</code></td>
+        <td><code style="font-size:10px">{{capture.payment_sha256[:16]}}...</code></td>
+        <td><a href="/view/{{capture.id}}" class="view-btn">View PDF</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    No captures found
+    {% if location_filter or stock_filter %}
+    <br><br><a href="/history" style="color:#2563eb">Clear filters</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</body>
+</html>
+    """, captures=captures, location_filter=location_filter, stock_filter=stock_filter, sort_by=sort_by)
+    return Response(html, mimetype="text/html")
 
 @app.get("/view/<int:capture_id>")
 def view_capture(capture_id):
-    # ... unchanged
-    # [SNIP — keep original implementation]
-    pass  # <-- replace with your original view_capture function body
+    with get_db() as conn:
+        capture = conn.execute("SELECT * FROM captures WHERE id = ?", (capture_id,)).fetchone()
+    
+    if not capture:
+        return Response("Capture not found", status=404)
+    
+    if capture['pdf_path'] and os.path.exists(capture['pdf_path']):
+        return send_file(capture['pdf_path'], mimetype="application/pdf", as_attachment=True,
+                        download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf")
+    
+    price_path = capture['price_screenshot_path']
+    pay_path = capture['payment_screenshot_path']
+    
+    if (price_path and os.path.exists(price_path)) or (pay_path and os.path.exists(pay_path)):
+        print(f"📄 Regenerating PDF for capture {capture_id}")
+        
+        rfc_price = None
+        rfc_pay = None
+        if capture['price_tsa']:
+            rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None}
+        if capture['payment_tsa']:
+            rfc_pay = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None}
+        
+        try:
+            pdf_path = generate_pdf(
+                stock=capture['stock'],
+                location=capture['location'],
+                zip_code=capture['zip_code'],
+                url=capture['url'],
+                utc_time=capture['capture_utc'],
+                https_date=capture['https_date'],
+                price_path=price_path if os.path.exists(price_path or "") else None,
+                pay_path=pay_path if os.path.exists(pay_path or "") else None,
+                sha_price=capture['price_sha256'],
+                sha_pay=capture['payment_sha256'],
+                rfc_price=rfc_price,
+                rfc_pay=rfc_pay,
+                debug_info=capture['debug_info']
+            )
+            
+            if pdf_path and os.path.exists(pdf_path):
+                return send_file(pdf_path, mimetype="application/pdf", as_attachment=True,
+                               download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf")
+        except Exception as e:
+            print(f"❌ PDF regeneration failed: {e}")
+            traceback.print_exc()
+    
+    return Response("PDF and screenshots no longer available. Data has been cleaned up.", status=404)
 
 @app.post("/capture")
 def capture():
-    # ... unchanged
-    # [SNIP — keep original implementation]
-    pass  # <-- replace with your original capture function body
+    try:
+        stock = (request.form.get("stock") or "").strip()
+        location = (request.form.get("location") or "portland").strip().lower()
+        
+        if not stock.isdigit():
+            return Response("Invalid stock number", status=400)
+        
+        if location not in CW_LOCATIONS:
+            return Response("Invalid location", status=400)
+        
+        loc_info = CW_LOCATIONS[location]
+        zip_code = loc_info["zip"]
+        location_name = loc_info["name"]
+        latitude = loc_info["lat"]
+        longitude = loc_info["lon"]
+
+        price_path, pay_path, url, debug_info = do_capture(stock, zip_code, location_name, latitude, longitude)
+
+        utc_now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+        hdate = https_date()
+
+        price_ok = bool(price_path and os.path.exists(price_path))
+        pay_ok   = bool(pay_path   and os.path.exists(pay_path))
+
+        sha_price = sha256_file(price_path) if price_ok else "N/A"
+        sha_pay   = sha256_file(pay_path)   if pay_ok   else "N/A"
+
+        rfc_price = None
+        rfc_pay = None
+        try:
+            rfc_price = get_rfc3161_timestamp(price_path) if price_ok else None
+        except Exception as e:
+            print(f"⚠ RFC 3161 timestamp failed for price: {e}")
+        
+        try:
+            rfc_pay = get_rfc3161_timestamp(pay_path) if pay_ok else None
+        except Exception as e:
+            print(f"⚠ RFC 3161 timestamp failed for payment: {e}")
+
+        pdf_path = None
+        if price_ok or pay_ok:
+            try:
+                pdf_path = generate_pdf(
+                    stock=stock,
+                    location=location_name,
+                    zip_code=zip_code,
+                    url=url,
+                    utc_time=utc_now,
+                    https_date=hdate,
+                    price_path=price_path if price_ok else None,
+                    pay_path=pay_path if pay_ok else None,
+                    sha_price=sha_price,
+                    sha_pay=sha_pay,
+                    rfc_price=rfc_price,
+                    rfc_pay=rfc_pay,
+                    debug_info=debug_info
+                )
+            except Exception as e:
+                print(f"❌ PDF generation error: {e}")
+                traceback.print_exc()
+                pdf_path = None
+
+        capture_id = None
+        try:
+            with get_db() as conn:
+                cursor = conn.execute("""
+                    INSERT INTO captures (
+                        stock, location, zip_code, url, capture_utc, https_date,
+                        price_sha256, payment_sha256, price_screenshot_path, payment_screenshot_path,
+                        price_tsa, price_timestamp, payment_tsa, payment_timestamp,
+                        pdf_path, debug_info
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    stock, location_name, zip_code, url, utc_now, hdate,
+                    sha_price, sha_pay, price_path, pay_path,
+                    rfc_price['tsa'] if rfc_price else None,
+                    rfc_price['timestamp'] if rfc_price else None,
+                    rfc_pay['tsa'] if rfc_pay else None,
+                    rfc_pay['timestamp'] if rfc_pay else None,
+                    pdf_path, debug_info
+                ))
+                capture_id = cursor.lastrowid
+                print(f"✓ Saved to database with ID: {capture_id}")
+        except Exception as e:
+            print(f"⚠ Database save failed: {e}")
+            traceback.print_exc()
+
+        if pdf_path and os.path.exists(pdf_path):
+            return send_file(pdf_path, mimetype="application/pdf", as_attachment=True,
+                           download_name=f"CW_Capture_{stock}_{capture_id or 'temp'}.pdf")
+        else:
+            error_html = f"""
+<!doctype html>
+<html>
+<head><title>PDF Generation Failed</title>
+<style>body{{font-family:sans-serif;padding:40px;background:#f3f4f6}}
+.error{{background:#fff;padding:20px;border-radius:8px;max-width:800px;margin:0 auto}}
+h1{{color:#dc2626}}pre{{background:#f9fafb;padding:12px;border-radius:4px;overflow:auto}}
+a{{color:#2563eb}}</style>
+</head>
+<body>
+<div class="error">
+<h1>PDF Generation Failed</h1>
+<p>Screenshots were captured successfully but PDF generation failed.</p>
+<p><strong>Stock:</strong> {stock} | <strong>Location:</strong> {location_name}</p>
+<p><strong>Price OK:</strong> {price_ok} | <strong>Payment OK:</strong> {pay_ok}</p>
+<h3>Debug Information:</h3>
+<pre>{debug_info}</pre>
+<p><a href="/">← Back to Home</a></p>
+</div>
+</body>
+</html>
+            """
+            return Response(error_html, mimetype="text/html", status=500)
+
+    except Exception as e:
+        print("❌ /capture failed:", e, file=sys.stderr)
+        traceback.print_exc()
+        return Response(f"Error: {e}", status=500)
 
 # -------------------- Helpers --------------------
 
 def generate_pdf(stock, location, zip_code, url, utc_time, https_date, 
                  price_path, pay_path, sha_price, sha_pay, 
                  rfc_price, rfc_pay, debug_info):
-    """
-    Generate a single-page PDF with top/bottom screenshots.
-    Strategy:
-      • Tighten top/bottom margins.
-      • Minimize spacers/table font sizes.
-      • Dynamically split remaining vertical space between images so both fit.
-    """
+    """Generate PDF report with screenshots side by side"""
     try:
-        # Choose a working directory
         if price_path:
             tmpdir = os.path.dirname(price_path)
         elif pay_path:
@@ -483,38 +958,26 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
         
         pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
-        print(f"📄 Generating single-page PDF at: {pdf_path}")
-
-        PAGE_W, PAGE_H = letter
-        # Slightly smaller top/bottom margins as requested
-        top_margin = 0.35 * inch
-        bottom_margin = 0.35 * inch
-        side_margin = 0.5 * inch
-
-        doc = SimpleDocTemplate(
-            pdf_path,
-            pagesize=letter,
-            leftMargin=side_margin, rightMargin=side_margin,
-            topMargin=top_margin, bottomMargin=bottom_margin
-        )
-
+        print(f"📄 Generating PDF at: {pdf_path}")
+        
+        doc = SimpleDocTemplate(pdf_path, pagesize=letter,
+                               leftMargin=0.5*inch, rightMargin=0.5*inch,
+                               topMargin=0.5*inch, bottomMargin=0.5*inch)
+        
         story = []
         styles = getSampleStyleSheet()
-
-        # Tighter title & styling to save space
+        
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
-            fontSize=14,
-            leading=16,
+            fontSize=18,
             textColor=colors.HexColor('#003087'),
-            spaceAfter=4,
+            spaceAfter=12,
             alignment=TA_CENTER
         )
         story.append(Paragraph("Camping World Compliance Capture Report", title_style))
-        story.append(Spacer(1, 0.08*inch))
-
-        # Metadata: smaller fonts & compact grid
+        story.append(Spacer(1, 0.2*inch))
+        
         meta_data = [
             ['Stock Number:', stock],
             ['Location:', f"{location} (ZIP: {zip_code})"],
@@ -522,148 +985,129 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             ['Capture Time (UTC):', utc_time],
             ['HTTPS Date:', https_date or 'N/A'],
         ]
-        meta_table = Table(meta_data, colWidths=[1.7*inch, (PAGE_W - 2*side_margin) - 1.7*inch])
+        
+        meta_table = Table(meta_data, colWidths=[2*inch, 5*inch])
         meta_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f3f4f6')),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
             ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 8),
-            ('LEADING', (0, 0), (-1, -1), 9),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('GRID', (0, 0), (-1, -1), 0.25, colors.lightgrey),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-            ('TOPPADDING', (0, 0), (-1, -1), 2),
         ]))
         story.append(meta_table)
-        story.append(Spacer(1, 0.06*inch))
-
-        # Cryptographic timestamps (optional, compact)
+        story.append(Spacer(1, 0.2*inch))
+        
         if rfc_price or rfc_pay:
-            small_heading = ParagraphStyle('h2small', parent=styles['Heading2'], fontSize=11, leading=12, spaceAfter=2)
-            story.append(Paragraph("Cryptographic Timestamps (RFC 3161)", small_heading))
+            story.append(Paragraph("Cryptographic Timestamps (RFC 3161)", styles['Heading2']))
             ts_data = []
             if rfc_price:
                 ts_data.append(['Price Disclosure:', f"{rfc_price['timestamp']} | TSA: {rfc_price['tsa']}"])
             if rfc_pay:
                 ts_data.append(['Payment Disclosure:', f"{rfc_pay['timestamp']} | TSA: {rfc_pay['tsa']}"])
-            ts_table = Table(ts_data, colWidths=[1.7*inch, (PAGE_W - 2*side_margin) - 1.7*inch])
+            
+            ts_table = Table(ts_data, colWidths=[2*inch, 5*inch])
             ts_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#ecfdf5')),
+                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
                 ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 7),
-                ('LEADING', (0, 0), (-1, -1), 8),
-                ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#10b981')),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-                ('TOPPADDING', (0, 0), (-1, -1), 2),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#10b981')),
             ]))
             story.append(ts_table)
-            story.append(Spacer(1, 0.06*inch))
-
-        # Section label, very compact
-        story.append(Paragraph("<b>Captured Disclosures</b>", ParagraphStyle('lbl', parent=styles['Normal'], fontSize=10, leading=11)))
-        story.append(Spacer(1, 0.04*inch))
-
-        # Helper to compute scaled sizes
-        def scaled_img_dims(path, max_w, max_h):
-            im = PILImage.open(path)
-            w, h = im.size
-            aspect = h / float(w)
-            # initial dimensions based on max width
-            tw = min(max_w, w)
-            th = tw * aspect
-            if th > max_h:
-                th = max_h
-                tw = th / aspect
-            return tw, th
-
-        # We will calculate how much vertical room is left for images and split it
-        usable_h = PAGE_H - top_margin - bottom_margin
-
-        # Estimate fixed block height that’s already in 'story' above.
-        # These estimates are conservative to ensure we stay on one page.
-        est_title = 0.30 * inch
-        est_meta  = 0.90 * inch
-        est_ts    = 0.55 * inch if (rfc_price or rfc_pay) else 0
-        est_labels_and_spacers = 0.30 * inch
-        est_hashes = 0.70 * inch   # at the end
-
-        fixed_blocks = est_title + est_meta + est_ts + est_labels_and_spacers + est_hashes
-        # Make sure we leave a little buffer
-        buffer = 0.15 * inch
-
-        img_budget = max(usable_h - fixed_blocks - buffer, 1.8 * inch)  # never allow less than 1.8" total
-
-        # Decide how to split between price and payment
-        have_price = bool(price_path and os.path.exists(price_path))
-        have_pay   = bool(pay_path and os.path.exists(pay_path))
-
-        # Default split: if two images, split ~50/50; if one, give it all.
-        if have_price and have_pay:
-            price_budget = img_budget * 0.5
-            pay_budget   = img_budget * 0.5
-        elif have_price:
-            price_budget = img_budget
-            pay_budget   = 0
-        elif have_pay:
-            price_budget = 0
-            pay_budget   = img_budget
+            story.append(Spacer(1, 0.2*inch))
+        
+        story.append(Paragraph("Captured Disclosures", styles['Heading2']))
+        story.append(Spacer(1, 0.1*inch))
+        
+        # Price Disclosure (Top)
+        if price_path and os.path.exists(price_path):
+            try:
+                story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+                story.append(Spacer(1, 0.05*inch))
+                
+                img = PILImage.open(price_path)
+                # Full width for better readability
+                img_width = 7*inch
+                aspect = img.height / img.width
+                target_height = img_width * aspect
+                
+                # Limit height to fit on page
+                if target_height > 3.5*inch:
+                    target_height = 3.5*inch
+                    img_width = target_height / aspect
+                
+                img_obj = Image(price_path, width=img_width, height=target_height)
+                
+                # Center the image
+                img_table = Table([[img_obj]], colWidths=[7*inch])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                ]))
+                story.append(img_table)
+                story.append(Spacer(1, 0.15*inch))
+            except Exception as e:
+                print(f"⚠ Error processing price image: {e}")
+                story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
+                story.append(Spacer(1, 0.15*inch))
         else:
-            price_budget = 0
-            pay_budget   = 0
-
-        max_img_width = (PAGE_W - 2*side_margin)
-
-        # Price block
-        if have_price:
-            story.append(Paragraph("<b>Price Disclosure</b>", ParagraphStyle('lbl2', parent=styles['Normal'], fontSize=9, leading=10)))
-            tw, th = scaled_img_dims(price_path, max_img_width, price_budget)
-            img_obj = Image(price_path, width=tw, height=th)
-            # Center via one-cell table, tight spacers
-            t = Table([[img_obj]], colWidths=[max_img_width])
-            t.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER')]))
-            story.append(t)
-            story.append(Spacer(1, 0.06*inch))
+            story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+            story.append(Spacer(1, 0.05*inch))
+            story.append(Paragraph("Price disclosure not available", styles['Normal']))
+            story.append(Spacer(1, 0.15*inch))
+        
+        # Payment Disclosure (Bottom)
+        if pay_path and os.path.exists(pay_path):
+            try:
+                story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+                story.append(Spacer(1, 0.05*inch))
+                
+                img = PILImage.open(pay_path)
+                img_width = 7*inch
+                aspect = img.height / img.width
+                target_height = img_width * aspect
+                
+                if target_height > 3.5*inch:
+                    target_height = 3.5*inch
+                    img_width = target_height / aspect
+                
+                img_obj = Image(pay_path, width=img_width, height=target_height)
+                
+                img_table = Table([[img_obj]], colWidths=[7*inch])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                ]))
+                story.append(img_table)
+                story.append(Spacer(1, 0.15*inch))
+            except Exception as e:
+                print(f"⚠ Error processing payment image: {e}")
+                story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
+                story.append(Spacer(1, 0.15*inch))
         else:
-            story.append(Paragraph("<b>Price Disclosure</b> — not available", ParagraphStyle('lbl2', parent=styles['Normal'], fontSize=9, leading=10)))
-            story.append(Spacer(1, 0.04*inch))
-
-        # Payment block
-        if have_pay:
-            story.append(Paragraph("<b>Payment Disclosure</b>", ParagraphStyle('lbl2', parent=styles['Normal'], fontSize=9, leading=10)))
-            tw, th = scaled_img_dims(pay_path, max_img_width, pay_budget)
-            img_obj = Image(pay_path, width=tw, height=th)
-            t = Table([[img_obj]], colWidths=[max_img_width])
-            t.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER')]))
-            story.append(t)
-            story.append(Spacer(1, 0.06*inch))
-        else:
-            story.append(Paragraph("<b>Payment Disclosure</b> — not available", ParagraphStyle('lbl2', parent=styles['Normal'], fontSize=9, leading=10)))
-            story.append(Spacer(1, 0.04*inch))
-
-        # Hashes (very compact)
-        story.append(Paragraph("SHA-256 Verification Hashes", ParagraphStyle('h2mini', parent=styles['Heading2'], fontSize=11, leading=12, spaceAfter=2)))
+            story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+            story.append(Spacer(1, 0.05*inch))
+            story.append(Paragraph("Payment disclosure not available", styles['Normal']))
+            story.append(Spacer(1, 0.15*inch))
+        
+        story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
         hash_data = [
             ['Price Disclosure:', sha_price],
             ['Payment Disclosure:', sha_pay],
         ]
-        hash_table = Table(hash_data, colWidths=[1.7*inch, (PAGE_W - 2*side_margin) - 1.7*inch])
+        hash_table = Table(hash_data, colWidths=[2*inch, 5*inch])
         hash_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTNAME', (1, 0), (1, -1), 'Courier'),
             ('FONTSIZE', (0, 0), (-1, -1), 7),
-            ('LEADING', (0, 0), (-1, -1), 8),
-            ('GRID', (0, 0), (-1, -1), 0.25, colors.lightgrey),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ]))
         story.append(hash_table)
-
-        # Build doc
+        
         doc.build(story)
-        print(f"✓ Single-page PDF generated: {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
+        print(f"✓ PDF generated successfully: {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
         return pdf_path
-
+        
     except Exception as e:
         print(f"❌ PDF generation failed: {e}")
         traceback.print_exc()
@@ -728,12 +1172,328 @@ def get_rfc3161_timestamp(file_path):
     return None
 
 def find_and_trigger_tooltip(page, label_text, tooltip_name):
-    # ... unchanged
-    pass  # <-- replace with your original function body
+    """Enhanced tooltip triggering with multiple fallback strategies."""
+    debug = []
+    debug.append(f"Attempting to trigger {tooltip_name} tooltip for label: '{label_text}'")
+    
+    try:
+        page.wait_for_timeout(1500)
+        
+        all_labels = page.locator(f"text={label_text}").all()
+        debug.append(f"Found {len(all_labels)} instances of '{label_text}'")
+        
+        if len(all_labels) == 0:
+            debug.append(f"❌ No instances found - element may not exist on page")
+            return False, "\n".join(debug)
+        
+        success = False
+        for idx, label in enumerate(all_labels):
+            try:
+                is_visible = label.is_visible(timeout=1000)
+                if not is_visible:
+                    debug.append(f"  Instance {idx}: not visible, skipping")
+                    continue
+                
+                debug.append(f"  Instance {idx}: visible, attempting trigger")
+                
+                label.scroll_into_view_if_needed(timeout=3000)
+                page.wait_for_timeout(800)
+                
+                icon_found = False
+                
+                try:
+                    parent = label.locator("xpath=..").first
+                    svg_icons = parent.locator("svg.MuiSvgIcon-root").all()
+                    
+                    debug.append(f"    Found {len(svg_icons)} SVG icons in parent")
+                    
+                    for svg_idx, svg_icon in enumerate(svg_icons):
+                        try:
+                            if svg_icon.is_visible(timeout=500):
+                                debug.append(f"    Attempting to click SVG icon {svg_idx}...")
+                                svg_icon.click(timeout=2000, force=True)
+                                page.wait_for_timeout(1000)
+                                icon_found = True
+                                debug.append(f"    ✓ Clicked SVG icon {svg_idx}")
+                                break
+                        except Exception as e:
+                            debug.append(f"    SVG {svg_idx} click failed: {str(e)[:100]}")
+                            continue
+                            
+                except Exception as e:
+                    debug.append(f"    Parent SVG search failed: {str(e)[:100]}")
+                
+                if not icon_found:
+                    try:
+                        debug.append(f"    Trying data-testid selectors...")
+                        info_selectors = [
+                            '[data-testid*="info"]',
+                            '[data-testid*="Info"]',
+                            'svg[data-testid]',
+                        ]
+                        
+                        for selector in info_selectors:
+                            nearby_icons = page.locator(selector).all()
+                            if len(nearby_icons) > 0:
+                                debug.append(f"    Found {len(nearby_icons)} with {selector}")
+                                for icon in nearby_icons:
+                                    try:
+                                        if icon.is_visible(timeout=500):
+                                            icon.click(timeout=2000, force=True)
+                                            page.wait_for_timeout(1000)
+                                            icon_found = True
+                                            debug.append(f"    ✓ Clicked icon via {selector}")
+                                            break
+                                    except:
+                                        continue
+                            if icon_found:
+                                break
+                    except Exception as e:
+                        debug.append(f"    data-testid search failed: {str(e)[:100]}")
+                
+                if not icon_found:
+                    debug.append(f"    No icon found, hovering label as fallback...")
+                    try:
+                        label.hover(timeout=2000, force=True)
+                        page.wait_for_timeout(1200)
+                        debug.append(f"    ✓ Hovered label")
+                    except Exception as e:
+                        debug.append(f"    Hover failed: {str(e)[:100]}")
+                
+                page.wait_for_timeout(1500)
+                
+                tooltip_selectors = [
+                    "[role='tooltip']",
+                    ".MuiTooltip-popper",
+                    ".MuiTooltip-tooltip",
+                    ".MuiPopper-root",
+                ]
+                
+                tooltip_found = False
+                for selector in tooltip_selectors:
+                    try:
+                        tooltips = page.locator(selector).all()
+                        for tooltip in tooltips:
+                            if tooltip.is_visible(timeout=1000):
+                                debug.append(f"    ✓ Tooltip visible with: {selector}")
+                                page.wait_for_timeout(1000)
+                                tooltip_found = True
+                                success = True
+                                break
+                        if tooltip_found:
+                            break
+                    except:
+                        continue
+                
+                if success:
+                    debug.append(f"  ✓ Successfully triggered tooltip from instance {idx}")
+                    break
+                else:
+                    debug.append(f"    ⚠ No tooltip appeared for instance {idx}")
+                    
+            except Exception as e:
+                debug.append(f"  Instance {idx} failed: {str(e)[:150]}")
+                continue
+        
+        if not success:
+            debug.append("⚠ All standard methods failed, trying JavaScript injection...")
+            try:
+                result = page.evaluate(f"""
+                    () => {{
+                        const labels = Array.from(document.querySelectorAll('*'))
+                            .filter(el => el.textContent.trim() === '{label_text}');
+                        
+                        console.log('JS: Found', labels.length, 'label elements');
+                        
+                        for (const label of labels) {{
+                            const parent = label.parentElement;
+                            if (!parent) continue;
+                            
+                            const svg = parent.querySelector('svg');
+                            if (svg) {{
+                                console.log('JS: Found SVG, triggering events');
+                                svg.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+                                
+                                setTimeout(() => {{
+                                    ['mouseenter', 'mouseover', 'mousemove', 'click'].forEach(eventType => {{
+                                        svg.dispatchEvent(new MouseEvent(eventType, {{
+                                            bubbles: true,
+                                            cancelable: true,
+                                            view: window
+                                        }}));
+                                    }});
+                                }}, 500);
+                                
+                                return true;
+                            }}
+                        }}
+                        return false;
+                    }}
+                """)
+                
+                if result:
+                    page.wait_for_timeout(2000)
+                    debug.append("✓ JavaScript fallback executed - events dispatched")
+                    
+                    for selector in tooltip_selectors:
+                        try:
+                            if page.locator(selector).first.is_visible(timeout=2000):
+                                debug.append(f"✓ Tooltip appeared after JS fallback: {selector}")
+                                success = True
+                                break
+                        except:
+                            continue
+                else:
+                    debug.append("⚠ JavaScript fallback: no SVG elements found")
+                    
+            except Exception as e:
+                debug.append(f"JavaScript fallback error: {str(e)[:150]}")
+        
+        return success, "\n".join(debug)
+        
+    except Exception as e:
+        debug.append(f"❌ Critical Error: {str(e)}")
+        traceback.print_exc()
+        return False, "\n".join(debug)
 
 def do_capture(stock, zip_code, location_name, latitude, longitude):
-    # ... unchanged
-    pass  # <-- replace with your original function body
+    url = f"https://rv.campingworld.com/rv/{stock}"
+    
+    if STORAGE_MODE == "persistent" and PERSISTENT_STORAGE_PATH:
+        os.makedirs(PERSISTENT_STORAGE_PATH, exist_ok=True)
+        tmpdir = os.path.join(PERSISTENT_STORAGE_PATH, f"cw-{stock}-{int(time.time())}")
+        os.makedirs(tmpdir, exist_ok=True)
+    else:
+        tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+    
+    price_png = os.path.join(tmpdir, f"cw_{stock}_price.png")
+    pay_png   = os.path.join(tmpdir, f"cw_{stock}_payment.png")
+    
+    all_debug = []
+    all_debug.append(f"Starting capture for stock: {stock}")
+    all_debug.append(f"URL: {url}")
+    all_debug.append(f"Location: {location_name} (ZIP: {zip_code})")
+    all_debug.append(f"Coordinates: {latitude}, {longitude}")
+
+    print(f"🚀 Starting capture: {url} (ZIP: {zip_code}, Location: {location_name})")
+    
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled"
+                ],
+            )
+            
+            context = browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                           "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+                locale="en-US",
+                geolocation={"latitude": latitude, "longitude": longitude},
+                permissions=["geolocation"]
+            )
+            
+            all_debug.append(f"✓ Browser context created with geolocation: {latitude}, {longitude}")
+            
+            page = context.new_page()
+            
+            all_debug.append("Navigating to page...")
+            page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            
+            try:
+                page.wait_for_load_state("networkidle", timeout=30_000)
+                all_debug.append("✓ Network idle reached")
+            except:
+                all_debug.append("⚠ Network idle timeout (continuing anyway)")
+            
+            try:
+                page.evaluate(f"""
+                    localStorage.setItem('cw_zip', '{zip_code}');
+                    document.cookie = 'cw_zip={zip_code};path=/;SameSite=Lax';
+                """)
+                all_debug.append(f"✓ Injected ZIP: {zip_code}")
+                page.reload(wait_until="load", timeout=30_000)
+                page.wait_for_timeout(2000)
+                all_debug.append("✓ Reloaded page with ZIP")
+            except Exception as e:
+                all_debug.append(f"⚠ ZIP injection issue: {e}")
+            
+            page.add_style_tag(content="""
+                [id*="intercom"], [class*="livechat"], [class*="chat"],
+                .cf-overlay, .cf-powered-by, .cf-cta,
+                .MuiBackdrop-root, [role="dialog"]:not([role="tooltip"]) {
+                    display: none !important;
+                    visibility: hidden !important;
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                }
+            """)
+            all_debug.append("✓ Overlay-hiding CSS injected")
+            
+            page.wait_for_timeout(2000)
+            
+            try:
+                page.evaluate("""
+                    window.scrollTo({
+                        top: document.body.scrollHeight * 0.3,
+                        behavior: 'smooth'
+                    });
+                """)
+                page.wait_for_timeout(1000)
+                all_debug.append("✓ Scrolled to pricing section")
+            except Exception as e:
+                all_debug.append(f"⚠ Scroll failed: {e}")
+            
+            all_debug.append("\n--- Capturing Price Tooltip ---")
+            success, debug_info = find_and_trigger_tooltip(page, "Total Price", "price")
+            all_debug.append(debug_info)
+            
+            if success:
+                try:
+                    page.screenshot(path=price_png, full_page=True)
+                    size = os.path.getsize(price_png)
+                    all_debug.append(f"✓ Price screenshot saved: {size} bytes")
+                    print(f"✓ Price screenshot: {size} bytes")
+                except Exception as e:
+                    all_debug.append(f"❌ Price screenshot failed: {e}")
+                    price_png = None
+            else:
+                price_png = None
+            
+            page.wait_for_timeout(1000)
+            
+            all_debug.append("\n--- Capturing Payment Tooltip ---")
+            success, debug_info = find_and_trigger_tooltip(page, "Est. Payment", "payment")
+            all_debug.append(debug_info)
+            
+            if success:
+                try:
+                    page.screenshot(path=pay_png, full_page=True)
+                    size = os.path.getsize(pay_png)
+                    all_debug.append(f"✓ Payment screenshot saved: {size} bytes")
+                    print(f"✓ Payment screenshot: {size} bytes")
+                except Exception as e:
+                    all_debug.append(f"❌ Payment screenshot failed: {e}")
+                    pay_png = None
+            else:
+                pay_png = None
+            
+            browser.close()
+            all_debug.append("\n✓ Browser closed")
+    
+    except Exception as e:
+        all_debug.append(f"\n❌ CRITICAL ERROR: {str(e)}")
+        all_debug.append(traceback.format_exc())
+        print(f"❌ Critical error in do_capture: {e}")
+        traceback.print_exc()
+    
+    debug_output = "\n".join(all_debug)
+    return price_png, pay_png, url, debug_output
 
 # -------------------- Entrypoint --------------------
 
