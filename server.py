@@ -1,5 +1,5 @@
 # server.py
-import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io
+import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io, re # <-- 1. IMPORTED RE
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from rfc3161ng import RemoteTimestamper, get_hash_oid
@@ -833,8 +833,11 @@ def capture():
         stock = (request.form.get("stock") or "").strip()
         location = (request.form.get("location") or "portland").strip().lower()
         
-        if not stock.isdigit():
-            return Response("Invalid stock number", status=400)
+        # --- 2. MODIFIED VALIDATION ---
+        # Was: if not stock.isdigit():
+        if not re.match(r"^[a-zA-Z0-9]+$", stock):
+            return Response("Invalid stock number. Please use letters and numbers only.", status=400)
+        # --- END MODIFICATION ---
         
         if location not in CW_LOCATIONS:
             return Response("Invalid location", status=400)
@@ -932,7 +935,7 @@ a{{color:#2563eb}}</style>
 <body>
 <div class="error">
 <h1>PDF Generation Failed</h1>
-<p>Screenshots were captured successfully but PDF generation failed.</p>
+<p>Screenshots may not have been captured, or PDF generation failed.</p>
 <p><strong>Stock:</strong> {stock} | <strong>Location:</strong> {location_name}</p>
 <p><strong>Price OK:</strong> {price_ok} | <strong>Payment OK:</strong> {pay_ok}</p>
 <h3>Debug Information:</h3>
@@ -981,6 +984,24 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             spaceAfter=12,
             alignment=TA_CENTER
         )
+        
+        # --- 3. ADDED STYLE FOR "NOT FOUND" CALLOUT ---
+        not_found_style = ParagraphStyle(
+            'NotFound',
+            parent=styles['Normal'],
+            fontSize=11,
+            textColor=colors.HexColor('#991b1b'), # dark red
+            borderColor=colors.HexColor('#f87171'), # red
+            borderWidth=1,
+            borderPadding=12,
+            borderRadius=8,
+            backgroundColor=colors.HexColor('#fef2f2'), # light red
+            spaceAfter=16,
+            alignment=TA_CENTER,
+            leading=14
+        )
+        # --- END ADDED STYLE ---
+        
         story.append(Paragraph("Camping World Compliance Capture Report", title_style))
         story.append(Spacer(1, 0.2*inch))
         
@@ -1004,6 +1025,18 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         ]))
         story.append(meta_table)
         story.append(Spacer(1, 0.2*inch))
+        
+        # --- 3. ADDED LOGIC TO CHECK FOR "NOT FOUND" FLAG ---
+        is_not_found = "NOT_FOUND_CAPTURE=TRUE" in (debug_info or "")
+        
+        if is_not_found:
+            story.append(Paragraph(
+                "<b>Stock Number Not Found Online</b><br/><br/>"
+                "The current stock number is not being advertised online or the page was not found at the time of capture. "
+                "This report serves as a record that no online pricing was available to a customer.",
+                not_found_style
+            ))
+        # --- END ADDED LOGIC ---
         
         if rfc_price or rfc_pay:
             story.append(Paragraph("Cryptographic Timestamps (RFC 3161)", styles['Heading2']))
@@ -1030,7 +1063,13 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         # Price Disclosure (Top)
         if price_path and os.path.exists(price_path):
             try:
-                story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+                # --- 3. MODIFIED LOGIC FOR "NOT FOUND" LABEL ---
+                if is_not_found:
+                    story.append(Paragraph("<b>'Not Found' Page Screenshot</b>", styles['Normal']))
+                else:
+                    story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+                # --- END MODIFICATION ---
+                
                 story.append(Spacer(1, 0.05*inch))
                 
                 img = PILImage.open(price_path)
@@ -1057,11 +1096,14 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
                 print(f"⚠ Error processing price image: {e}")
                 story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
                 story.append(Spacer(1, 0.15*inch))
-        else:
+        
+        # --- 3. MODIFIED LOGIC TO HIDE "PAYMENT NOT AVAILABLE" ON "NOT FOUND" PAGES ---
+        elif not is_not_found: # Only show this if it's NOT a "not found" capture
             story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
             story.append(Spacer(1, 0.05*inch))
             story.append(Paragraph("Price disclosure not available", styles['Normal']))
             story.append(Spacer(1, 0.15*inch))
+        # --- END MODIFICATION ---
         
         # Payment Disclosure (Bottom)
         if pay_path and os.path.exists(pay_path):
@@ -1090,17 +1132,26 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
                 print(f"⚠ Error processing payment image: {e}")
                 story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
                 story.append(Spacer(1, 0.15*inch))
-        else:
+        
+        # --- 3. MODIFIED LOGIC TO HIDE "PAYMENT NOT AVAILABLE" ON "NOT FOUND" PAGES ---
+        elif not is_not_found: # Only show this if it's NOT a "not found" capture
             story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
             story.append(Spacer(1, 0.05*inch))
             story.append(Paragraph("Payment disclosure not available", styles['Normal']))
             story.append(Spacer(1, 0.15*inch))
+        # --- END MODIFICATION ---
         
         story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
-        hash_data = [
-            ['Price Disclosure:', sha_price],
-            ['Payment Disclosure:', sha_pay],
-        ]
+        
+        # --- 3. MODIFIED LOGIC FOR HASH LABELS ---
+        hash_data = []
+        if is_not_found:
+            hash_data.append(['Not Found Screenshot:', sha_price])
+        else:
+            hash_data.append(['Price Disclosure:', sha_price])
+            hash_data.append(['Payment Disclosure:', sha_pay])
+        # --- END MODIFICATION ---
+        
         hash_table = Table(hash_data, colWidths=[2*inch, 5*inch])
         hash_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
@@ -1488,6 +1539,39 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
                     pay_png = None
             else:
                 pay_png = None
+
+            # --- 4. ADDED "NOT FOUND" LOGIC ---
+            not_found = False
+            if price_png is None and pay_png is None:
+                all_debug.append("\n--- Checking for 'No Matches Found' ---")
+                try:
+                    # Check for common "not found" text patterns
+                    not_found_locator = page.locator(
+                        "h1:text-matches('Page Not Found', 'i'), "
+                        "h2:text-matches('No Matches Found', 'i'), "
+                        ":text-matches('Listings Not Found', 'i'), "
+                        ":text-matches('This listing is currently unavailable', 'i')"
+                    ).first
+                    
+                    if not_found_locator.is_visible(timeout=3000):
+                        not_found_text = not_found_locator.text_content()
+                        all_debug.append(f"✓ Found 'Not Found' text: {not_found_text.strip()}")
+                        
+                        # Re-purpose price_png for the "not found" screenshot
+                        price_png = os.path.join(tmpdir, f"cw_{stock}_not_found.png")
+                        page.screenshot(path=price_png, full_page=True)
+                        size = os.path.getsize(price_png)
+                        
+                        all_debug.append(f"✓ 'Not Found' screenshot saved: {size} bytes")
+                        not_found = True # Set flag
+                    else:
+                        all_debug.append("⚠ No 'Not Found' text detected.")
+                except Exception as e:
+                    all_debug.append(f"⚠ Error checking for 'Not Found' text: {e}")
+            
+            if not_found:
+                all_debug.append("NOT_FOUND_CAPTURE=TRUE")
+            # --- END "NOT FOUND" LOGIC ---
             
             browser.close()
             all_debug.append("\n✓ Browser closed")
