@@ -1,6 +1,6 @@
 # server.py
 import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io
-from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify
+from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify, session
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from rfc3161ng import RemoteTimestamper, get_hash_oid
 from reportlab.lib.pagesizes import letter
