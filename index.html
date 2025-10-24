@@ -405,30 +405,257 @@
     }
 
     /* Responsive */
-    @media (max-width: 768px) {
+    @media (max-width: 1024px) {
+      .container {
+        padding: 0 20px;
+      }
+
       h1 {
-        font-size: 40px;
+        font-size: 48px;
       }
 
       .subtitle {
-        font-size: 19px;
+        font-size: 21px;
+      }
+
+      .features {
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+    }
+
+    @media (max-width: 768px) {
+      header {
+        padding: 12px 0;
+      }
+
+      header .container {
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .logo {
+        font-size: 18px;
+      }
+
+      .nav-links {
+        gap: 16px;
+        font-size: 13px;
+      }
+
+      h1 {
+        font-size: 36px;
+      }
+
+      .subtitle {
+        font-size: 18px;
+        margin-bottom: 40px;
       }
 
       .hero {
-        padding: 48px 0 40px;
+        padding: 40px 0 32px;
       }
 
       .capture-section {
-        padding: 32px 24px;
+        padding: 32px 20px;
+        border-radius: 20px;
+      }
+
+      .capture-section h2 {
+        font-size: 28px;
+      }
+
+      .section-description {
+        font-size: 15px;
       }
 
       .features {
         grid-template-columns: 1fr;
+        gap: 16px;
       }
 
-      .nav-links {
-        gap: 20px;
+      .feature-card {
+        padding: 24px 20px;
+      }
+
+      .feature-icon {
+        width: 44px;
+        height: 44px;
+        font-size: 22px;
+      }
+
+      .feature-card h3 {
+        font-size: 18px;
+      }
+
+      .feature-card p {
+        font-size: 14px;
+      }
+
+      .how-it-works h2 {
+        font-size: 28px;
+      }
+
+      .step {
+        grid-template-columns: 50px 1fr;
+        gap: 16px;
+      }
+
+      .step-number {
+        width: 50px;
+        height: 50px;
+        font-size: 20px;
+      }
+
+      .step-content h3 {
+        font-size: 18px;
+      }
+
+      .step-content p {
+        font-size: 14px;
+      }
+
+      select, input[type="text"] {
+        padding: 12px 14px;
+        font-size: 16px;
+      }
+
+      button {
+        padding: 14px 28px;
+        font-size: 16px;
+      }
+
+      footer {
+        margin-top: 60px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 0 16px;
+      }
+
+      h1 {
+        font-size: 32px;
+      }
+
+      .subtitle {
+        font-size: 16px;
+      }
+
+      .hero {
+        padding: 32px 0 24px;
+      }
+
+      .capture-section {
+        padding: 24px 16px;
+        border-radius: 16px;
+      }
+
+      .capture-section h2 {
+        font-size: 24px;
+      }
+
+      .feature-card {
+        padding: 20px 16px;
+        border-radius: 16px;
+      }
+
+      .how-it-works h2 {
+        font-size: 24px;
+        margin-bottom: 32px;
+      }
+
+      .steps {
+        gap: 24px;
+      }
+
+      .step {
+        grid-template-columns: 44px 1fr;
+        gap: 12px;
+      }
+
+      .step-number {
+        width: 44px;
+        height: 44px;
+        font-size: 18px;
+      }
+
+      .step-content h3 {
+        font-size: 17px;
+      }
+
+      .step-content p {
         font-size: 13px;
+      }
+
+      .history-link {
+        padding: 10px 20px;
+        font-size: 14px;
+      }
+
+      form {
+        gap: 20px;
+      }
+
+      label {
+        font-size: 13px;
+      }
+
+      select, input[type="text"] {
+        padding: 11px 13px;
+        font-size: 16px;
+        border-radius: 10px;
+      }
+
+      select {
+        background-position: right 12px center;
+        padding-right: 38px;
+      }
+
+      button {
+        padding: 13px 24px;
+        font-size: 15px;
+        border-radius: 10px;
+      }
+
+      .loading {
+        padding: 20px;
+        font-size: 14px;
+      }
+
+      .spinner {
+        width: 20px;
+        height: 20px;
+        margin-right: 10px;
+      }
+
+      footer {
+        padding: 24px 0;
+        margin-top: 48px;
+      }
+
+      footer .container {
+        font-size: 12px;
+      }
+    }
+
+    /* Extra small devices */
+    @media (max-width: 360px) {
+      h1 {
+        font-size: 28px;
+      }
+
+      .subtitle {
+        font-size: 15px;
+      }
+
+      .capture-section h2 {
+        font-size: 22px;
+      }
+
+      .feature-card h3,
+      .step-content h3 {
+        font-size: 16px;
       }
     }
   </style>
