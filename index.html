@@ -13,7 +13,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   
   <style>
-    /* (All original styles are restored for the polished look) */
     * {
       margin: 0;
       padding: 0;
@@ -127,7 +126,7 @@
       font-size: 24px;
       font-weight: 400;
       color: var(--text-secondary);
-      margin-bottom: 48px; 
+      margin-bottom: 48px;
       max-width: 640px;
       margin-left: auto;
       margin-right: auto;
@@ -288,6 +287,12 @@
 
     .loading.active {
       display: block;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
     }
 
     .spinner {
@@ -345,68 +350,312 @@
       letter-spacing: -0.015em;
     }
 
-    /* Steps */
-    .steps-container {
+    .steps {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 40px;
+      gap: 32px;
     }
 
     .step {
-      text-align: center;
+      display: grid;
+      grid-template-columns: 60px 1fr;
+      gap: 24px;
+      align-items: start;
     }
 
-    .step-icon {
-      width: 64px;
-      height: 64px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
+    .step-number {
+      width: 60px;
+      height: 60px;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+      color: white;
       border-radius: 50%;
-      display: inline-flex;
+      display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 28px;
-      margin-bottom: 24px;
-      box-shadow: var(--shadow-sm);
+      font-size: 24px;
+      font-weight: 700;
+      flex-shrink: 0;
     }
 
-    .step h3 {
-      font-size: 18px;
+    .step-content h3 {
+      font-size: 20px;
       font-weight: 600;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
     }
 
-    .step p {
-      font-size: 15px;
+    .step-content p {
       color: var(--text-secondary);
+      font-size: 15px;
+      line-height: 1.6;
     }
 
     /* Footer */
     footer {
-      padding: 40px 0;
+      background: var(--bg-card);
       border-top: 1px solid var(--border);
+      padding: 32px 0;
+      margin-top: 80px;
+    }
+
+    footer .container {
       text-align: center;
-      font-size: 13px;
       color: var(--text-secondary);
-      line-height: 1.8;
+      font-size: 13px;
     }
 
     /* Responsive */
-    @media (max-width: 768px) {
+    @media (max-width: 1024px) {
+      .container {
+        padding: 0 20px;
+      }
+
       h1 {
-        font-size: 40px;
+        font-size: 48px;
+      }
+
+      .subtitle {
+        font-size: 21px;
+      }
+
+      .features {
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+    }
+
+    @media (max-width: 768px) {
+      header {
+        padding: 12px 0;
+      }
+
+      header .container {
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .logo {
+        font-size: 18px;
+      }
+
+      .nav-links {
+        gap: 16px;
+        font-size: 13px;
+      }
+
+      h1 {
+        font-size: 36px;
       }
 
       .subtitle {
         font-size: 18px;
+        margin-bottom: 40px;
       }
 
-      .steps-container {
-        grid-template-columns: 1fr;
+      .hero {
+        padding: 40px 0 32px;
       }
 
       .capture-section {
-        padding: 32px;
+        padding: 32px 20px;
+        border-radius: 20px;
+      }
+
+      .capture-section h2 {
+        font-size: 28px;
+      }
+
+      .section-description {
+        font-size: 15px;
+      }
+
+      .features {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+
+      .feature-card {
+        padding: 24px 20px;
+      }
+
+      .feature-icon {
+        width: 44px;
+        height: 44px;
+        font-size: 22px;
+      }
+
+      .feature-card h3 {
+        font-size: 18px;
+      }
+
+      .feature-card p {
+        font-size: 14px;
+      }
+
+      .how-it-works h2 {
+        font-size: 28px;
+      }
+
+      .step {
+        grid-template-columns: 50px 1fr;
+        gap: 16px;
+      }
+
+
+      .step-number {
+        width: 50px;
+        height: 50px;
+        font-size: 20px;
+      }
+
+      .step-content h3 {
+        font-size: 18px;
+      }
+
+      .step-content p {
+        font-size: 14px;
+      }
+
+      select, input[type="text"] {
+        padding: 12px 14px;
+        font-size: 16px;
+      }
+
+      button {
+        padding: 14px 28px;
+        font-size: 16px;
+      }
+
+      footer {
+        margin-top: 60px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 0 16px;
+      }
+
+      h1 {
+        font-size: 32px;
+      }
+
+      .subtitle {
+        font-size: 16px;
+      }
+
+      .hero {
+        padding: 32px 0 24px;
+      }
+
+      .capture-section {
+        padding: 24px 16px;
+        border-radius: 16px;
+      }
+
+      .capture-section h2 {
+        font-size: 24px;
+      }
+
+      .feature-card {
+        padding: 20px 16px;
+        border-radius: 16px;
+      }
+
+      .how-it-works h2 {
+        font-size: 24px;
+        margin-bottom: 32px;
+      }
+
+      .steps {
+        gap: 24px;
+      }
+
+      .step {
+        grid-template-columns: 44px 1fr;
+        gap: 12px;
+      }
+
+      .step-number {
+        width: 44px;
+        height: 44px;
+        font-size: 18px;
+      }
+
+      .step-content h3 {
+        font-size: 17px;
+      }
+
+      .step-content p {
+        font-size: 13px;
+      }
+
+      .history-link {
+        padding: 10px 20px;
+        font-size: 14px;
+      }
+
+      form {
+        gap: 20px;
+      }
+
+      label {
+        font-size: 13px;
+      }
+
+      select, input[type="text"] {
+        padding: 11px 13px;
+        font-size: 16px;
+        border-radius: 10px;
+      }
+
+      select {
+        background-position: right 12px center;
+        padding-right: 38px;
+      }
+
+      button {
+        padding: 13px 24px;
+        font-size: 15px;
+        border-radius: 10px;
+      }
+
+      .loading {
+        padding: 20px;
+        font-size: 14px;
+      }
+
+      .spinner {
+        width: 20px;
+        height: 20px;
+        margin-right: 10px;
+      }
+
+      footer {
+        padding: 24px 0;
+        margin-top: 48px;
+      }
+
+      footer .container {
+        font-size: 12px;
+      }
+    }
+
+    /* Extra small devices */
+    @media (max-width: 360px) {
+      h1 {
+        font-size: 28px;
+      }
+
+      .subtitle {
+        font-size: 15px;
+      }
+
+      .capture-section h2 {
+        font-size: 22px;
+      }
+
+      .feature-card h3,
+      .step-content h3 {
+        font-size: 16px;
       }
     }
   </style>
@@ -416,8 +665,6 @@
     <div class="container">
       <div class="logo">CW Compliance</div>
       <nav class="nav-links">
-        <a href="#capture">Capture</a>
-        <a href="#features">Features</a>
         <a href="#how-it-works">How It Works</a>
         <a href="/history">History</a>
       </nav>
@@ -427,97 +674,110 @@
   <main>
     <section class="hero">
       <div class="container">
-        <h1>Automated Compliance Capture</h1>
-        <p class="subtitle">Securely capture and timestamp RV price and payment disclosures for audit-ready compliance reports.</p>
-        </div>
+        <h1>Legal Screenshot Capture</h1>
+        <p class="subtitle">Automated compliance documentation for CW RV listings with cryptographic timestamps and verification</p>
+      </div>
     </section>
 
-    <section class="capture-section" id="capture">
-      <div class="container">
-        <h2>Run Compliance Capture</h2>
-        <p class="section-description">Select the store location and enter the **Stock Number** to generate the report.</p>
+    <section class="container">
+      <div class="capture-section">
+        <h2>Run Capture</h2>
+        <p class="section-description">Enter a CW RV stock number and select your location. The system will spoof GPS coordinates and ZIP codes to match the selected CW location, then capture pricing details with full legal documentation including cryptographic timestamps.</p>
 
-        <form action="/capture" method="POST" id="captureForm">
+        <form method="POST" action="/capture" id="captureForm">
           <div class="form-group">
-            <label for="location">CW Location (Oregon)</label>
-            <select id="location" name="location" required>
-              <option value="">Select Location</option>
-              <option value="bend">Bend (97701)</option>
-              <option value="eugene">Coburg (Eugene) (97408)</option>
-              <option value="hillsboro">Hillsboro (97124)</option>
-              <option value="medford">Medford (97504)</option>
-              <option value="portland">Wood Village (Portland) (97060)</option>
+            <label for="location">CW Location</label>
+            <select name="location" id="location" required>
+              <option value="bend">Bend, OR (97701)</option>
+              <option value="eugene">Eugene, OR (97402)</option>
+              <option value="hillsboro">Hillsboro, OR (97124)</option>
+              <option value="medford">Medford, OR (97504)</option>
+              <option value="portland" selected>Portland, OR (97201)</option>
             </select>
           </div>
 
           <div class="form-group">
             <label for="stock">Stock Number</label>
-            <input type="text" id="stock" name="stock" placeholder="e.g., 2607628p" required>
+            <input type="text" name="stock" id="stock" placeholder="2607628P" required pattern="[a-zA-Z0-9]+" title="Please enter a stock number (e.g., 2607628P)">
           </div>
-
+          
           <button type="submit" id="submitBtn">Run Capture</button>
         </form>
 
         <div class="loading" id="loading">
           <span class="spinner"></span>
-          Taking time to process capture, please wait...
+          Capturing screenshots and generating PDF... This may take 30-60 seconds.
         </div>
-
-      </div>
-    </section>
-
-    <section class="history-section">
-      <a href="/history" class="history-link">
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 6v6l4 2"/></svg>
-        View Capture History
-      </a>
-    </section>
-
-    <section id="features" class="container">
-      <div class="hero" style="padding-top: 0;">
-        <h2>Key Features</h2>
-        <p class="subtitle" style="margin-bottom: 40px;">Built for accuracy, speed, and indisputable proof of disclosure.</p>
       </div>
 
       <div class="features">
         <div class="feature-card">
           <div class="feature-icon">🔒</div>
-          <h3>Tamper-Proof Audit</h3>
-          <p>Every capture includes an RFC 3161 timestamp and a SHA-256 hash, creating an indisputable record of when the page content was seen.</p>
+          <h3>Legally Verifiable</h3>
+          <p>RFC 3161 cryptographic timestamps and SHA-256 hashes ensure authenticity for legal proceedings</p>
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon">🤖</div>
-          <h3>Automated Screenshots</h3>
-          <p>Uses a headless browser (Playwright) to navigate to the specific RV page and capture both the price disclosure and the payment tool in a single session.</p>
+          <div class="feature-icon">⚡</div>
+          <h3>Instant PDF Reports</h3>
+          <p>Automatically captures pricing tooltips and generates professional PDF documentation in under 60 seconds</p>
         </div>
 
         <div class="feature-card">
           <div class="feature-icon">📍</div>
-          <h3>Geolocation Compliance</h3>
-          <p>The capture is run from an Oregon-based server, simulating a local user experience to accurately reflect state-specific pricing and payment information.</p>
+          <h3>Geolocation Spoofing</h3>
+          <p>Accurately simulates browsing from any of 5 Oregon CW locations with GPS coordinates and ZIP codes</p>
         </div>
       </div>
-    </section>
 
-    <section id="how-it-works" class="how-it-works">
-      <div class="container">
+      <div class="history-section">
+        <a href="/history" class="history-link">
+          <span>📋</span>
+          View Capture History
+        </a>
+      </div>
+
+      <div class="how-it-works" id="how-it-works">
         <h2>How It Works</h2>
-        <div class="steps-container">
+        <div class="steps">
           <div class="step">
-            <div class="step-icon">1</div>
-            <h3>Input Details</h3>
-            <p>User selects the CW Location and inputs the **Stock Number** into the simplified form.</p>
+            <div class="step-number">1</div>
+            <div class="step-content">
+              <h3>Location Simulation</h3>
+              <p>Select one of 5 Oregon CW locations. The system spoofs browser geolocation with precise GPS coordinates (latitude/longitude) and injects the corresponding ZIP code. This ensures the CW website detects the correct location and displays accurate regional pricing, financing terms, and availability.</p>
+            </div>
           </div>
+
           <div class="step">
-            <div class="step-icon">2</div>
-            <h3>Automated Capture</h3>
-            <p>The server launches a browser, spoofs the store's location, and takes two precise screenshots (price/payment).</p>
+            <div class="step-number">2</div>
+            <div class="step-content">
+              <h3>Automated Screenshot Capture</h3>
+              <p>A headless Chromium browser navigates to the listing and automatically triggers pricing tooltips. Full-page screenshots capture both the total price breakdown (MSRP, discounts, fees) and estimated payment details including APR, loan term, down payment, and monthly payment amount.</p>
+            </div>
           </div>
+
           <div class="step">
-            <div class="step-icon">3</div>
-            <h3>Report Generation</h3>
-            <p>The server combines the screenshots, metadata, and official timestamp into a final, single-page PDF compliance report.</p>
+            <div class="step-number">3</div>
+            <div class="step-content">
+              <h3>Cryptographic Timestamping</h3>
+              <p>Each screenshot receives an RFC 3161 cryptographic timestamp from trusted Time Stamping Authorities (DigiCert, Apple, Starfield, or GlobalSign). This provides legally admissible proof of when the capture occurred and generates SHA-256 hashes to verify file integrity.</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">4</div>
+            <div class="step-content">
+              <h3>Professional PDF Generation</h3>
+              <p>The system compiles both screenshots side-by-side in a comprehensive PDF report including all metadata, timestamps, verification hashes, and capture details. The PDF automatically downloads to your computer as the permanent legal record.</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">5</div>
+            <div class="step-content">
+              <h3>Database Audit Trail</h3>
+              <p>All capture metadata is stored in a secure database for future reference. While screenshots are automatically cleaned up after 7 days to prevent storage bloat, the audit trail with hashes and timestamps remains permanently accessible.</p>
+            </div>
           </div>
         </div>
       </div>
@@ -538,18 +798,9 @@
     const loading = document.getElementById('loading');
 
     form.addEventListener('submit', function(e) {
-      // Prevent default submit initially to apply UI changes
-      e.preventDefault(); 
-      
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Running Capture...';
+      submitBtn.textContent = 'Processing...';
       loading.classList.add('active');
-
-      // Crucial Fix: Re-submit the form after the UI has updated. 
-      // This is the fix for the 405 error from the previous turn.
-      setTimeout(() => {
-          form.submit();
-      }, 10);
     });
 
     // Smooth scroll for anchor links
