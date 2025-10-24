@@ -337,7 +337,7 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         # ===== CAPTURE PAYMENT HOVER SCREENSHOT =====
         print("\n=== Capturing Payment Hover ===")
         
-        # Look for the payment element that triggers the tooltip
+        # Look for the payment element
         payment_selectors = [
             ".MuiTypography-root.MuiTypography-body2:has-text('Est. Payment')",
             "div:has-text('Est. Payment') .MuiTypography-body2",
@@ -365,36 +365,40 @@ def do_capture(stock: str) -> tuple[str, str, str]:
                                 
                                 # Look for Est. Payment specifically
                                 if 'est' in text_content and 'payment' in text_content:
-                                    print(f"  Found payment element at index {i}, triggering hover...")
+                                    print(f"  Found payment element, triggering hover...")
                                     elem.scroll_into_view_if_needed(timeout=5000)
                                     
                                     # Hover over the element
                                     elem.hover(timeout=10000, force=True)
                                     print("  Hover activated, waiting for tooltip...")
                                     
-                                    # Wait for the tooltip to appear using the exact classes from inspect element
+                                    # Wait for tooltip using role="tooltip" attribute
+                                    tooltip_found = False
                                     try:
+                                        # Try role="tooltip" selector
                                         page.wait_for_selector(
-                                            ".MuiTooltip-tooltip.MuiTooltip-tooltipArrow.MuiTooltip-tooltipPlacementBottom",
+                                            '[role="tooltip"]',
                                             state="visible",
                                             timeout=5000
                                         )
-                                        print("  ✅ Tooltip appeared!")
-                                    except Exception as tooltip_error:
-                                        print(f"  ⚠️ Tooltip wait timeout: {tooltip_error}")
-                                        # Try alternate tooltip selector
+                                        print("  ✅ Tooltip with role=\"tooltip\" appeared!")
+                                        tooltip_found = True
+                                    except Exception as e1:
+                                        print(f"  ⚠️ role=tooltip wait failed: {e1}")
+                                        # Try class-based selector as fallback
                                         try:
                                             page.wait_for_selector(
-                                                ".MuiTooltip-popper",
+                                                ".MuiTooltip-popper[style*=\"opacity\"]",
                                                 state="visible",
-                                                timeout=2000
+                                                timeout=3000
                                             )
                                             print("  ✅ Tooltip popper appeared!")
-                                        except:
-                                            print("  ⚠️ No tooltip detected, proceeding anyway")
+                                            tooltip_found = True
+                                        except Exception as e2:
+                                            print(f"  ⚠️ Popper wait failed: {e2}")
                                     
-                                    # Extra wait to ensure tooltip is fully rendered
-                                    page.wait_for_timeout(1000)
+                                    # Wait a bit more for animation to complete
+                                    page.wait_for_timeout(1500)
                                     
                                     # Take screenshot
                                     page.screenshot(path=payment_png_path, full_page=True)
@@ -402,6 +406,8 @@ def do_capture(stock: str) -> tuple[str, str, str]:
                                     if os.path.exists(payment_png_path):
                                         size = os.path.getsize(payment_png_path)
                                         print(f"✅ Payment screenshot saved: {size} bytes")
+                                        if tooltip_found:
+                                            print(f"✅ Tooltip was confirmed visible before screenshot")
                                         payment_captured = True
                                         break
                         except Exception as e:
