@@ -322,7 +322,6 @@ def root():
 @require_admin_auth
 def admin_dashboard():
     """Admin dashboard"""
-    """Admin dashboard"""
     try:
         # Get storage stats
         with get_db() as conn:
