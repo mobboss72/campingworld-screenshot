@@ -299,7 +299,7 @@ def do_capture(stock: str) -> tuple[str, str, str]:
         except Exception as e:
             print(f"Price selector wait failed: {e}")
 
-        # ===== CAPTURE PRICE HOVER SCREENSHOT =====
+        # ===== CAPTURE PRICE HOVER SCREENSHOT (WORKING - DON'T CHANGE) =====
         print("\n=== Capturing Price Hover ===")
         price_selector = ".MuiTypography-root.MuiTypography-subtitle1:visible"
         try:
@@ -334,92 +334,53 @@ def do_capture(stock: str) -> tuple[str, str, str]:
             print(f"❌ Price hover capture failed: {e}")
             traceback.print_exc()
 
-        # ===== CAPTURE PAYMENT HOVER SCREENSHOT =====
+        # ===== CAPTURE PAYMENT HOVER SCREENSHOT (SIMPLIFIED TO MIRROR PRICE) =====
         print("\n=== Capturing Payment Hover ===")
         
-        # Look for the payment element
-        payment_selectors = [
-            ".MuiTypography-root.MuiTypography-body2:has-text('Est. Payment')",
-            "div:has-text('Est. Payment') .MuiTypography-body2",
-            ".MuiTypography-body2:visible",
-        ]
-        
-        payment_captured = False
-        for selector_idx, payment_selector in enumerate(payment_selectors):
-            if payment_captured:
-                break
+        # Use the EXACT same simple approach as price hover
+        # Just find ANY MuiTypography element with "payment" text
+        try:
+            # Wait for payment elements to be available
+            page.wait_for_timeout(2000)  # Give page time to settle
+            
+            # Find all MuiTypography elements
+            all_typography = page.locator(".MuiTypography-root:visible")
+            count = all_typography.count()
+            print(f"Found {count} total MuiTypography elements")
+            
+            visible_payment = None
+            for i in range(count):
+                elem = all_typography.nth(i)
+                try:
+                    if elem.is_visible():
+                        text = elem.inner_text().lower()
+                        # Look for payment-related text
+                        if 'payment' in text or '/mo' in text:
+                            print(f"Found payment element at index {i}: {text[:50]}")
+                            visible_payment = elem
+                            break
+                except:
+                    continue
+            
+            if visible_payment:
+                visible_payment.scroll_into_view_if_needed(timeout=5000)
+                print("Scrolled to payment element")
+                visible_payment.hover(timeout=10000, force=True)
+                print("Hovering over payment element")
+                page.wait_for_timeout(2000)  # Slightly longer wait for payment tooltip
+                page.screenshot(path=payment_png_path, full_page=True)
                 
-            try:
-                print(f"Trying payment selector #{selector_idx + 1}: {payment_selector}")
-                payment_elements = page.locator(payment_selector)
-                count = payment_elements.count()
-                print(f"  Found {count} elements")
+                if os.path.exists(payment_png_path):
+                    size = os.path.getsize(payment_png_path)
+                    print(f"✅ Payment screenshot saved: {size} bytes")
+                else:
+                    print("❌ Payment screenshot file not created")
+            else:
+                print("❌ No visible payment element found")
                 
-                if count > 0:
-                    for i in range(count):
-                        elem = payment_elements.nth(i)
-                        try:
-                            if elem.is_visible():
-                                text_content = elem.inner_text().lower()
-                                print(f"  Element {i} text: {text_content[:100]}")
-                                
-                                # Look for Est. Payment specifically
-                                if 'est' in text_content and 'payment' in text_content:
-                                    print(f"  Found payment element, triggering hover...")
-                                    elem.scroll_into_view_if_needed(timeout=5000)
-                                    
-                                    # Hover over the element
-                                    elem.hover(timeout=10000, force=True)
-                                    print("  Hover activated, waiting for tooltip...")
-                                    
-                                    # Wait for tooltip using role="tooltip" attribute
-                                    tooltip_found = False
-                                    try:
-                                        # Try role="tooltip" selector
-                                        page.wait_for_selector(
-                                            '[role="tooltip"]',
-                                            state="visible",
-                                            timeout=5000
-                                        )
-                                        print("  ✅ Tooltip with role=\"tooltip\" appeared!")
-                                        tooltip_found = True
-                                    except Exception as e1:
-                                        print(f"  ⚠️ role=tooltip wait failed: {e1}")
-                                        # Try class-based selector as fallback
-                                        try:
-                                            page.wait_for_selector(
-                                                ".MuiTooltip-popper[style*=\"opacity\"]",
-                                                state="visible",
-                                                timeout=3000
-                                            )
-                                            print("  ✅ Tooltip popper appeared!")
-                                            tooltip_found = True
-                                        except Exception as e2:
-                                            print(f"  ⚠️ Popper wait failed: {e2}")
-                                    
-                                    # Wait a bit more for animation to complete
-                                    page.wait_for_timeout(1500)
-                                    
-                                    # Take screenshot
-                                    page.screenshot(path=payment_png_path, full_page=True)
-                                    
-                                    if os.path.exists(payment_png_path):
-                                        size = os.path.getsize(payment_png_path)
-                                        print(f"✅ Payment screenshot saved: {size} bytes")
-                                        if tooltip_found:
-                                            print(f"✅ Tooltip was confirmed visible before screenshot")
-                                        payment_captured = True
-                                        break
-                        except Exception as e:
-                            print(f"  Element {i} failed: {e}")
-                            continue
-                    
-            except Exception as e:
-                print(f"  Selector #{selector_idx + 1} error: {e}")
-                continue
-        
-        if not payment_captured:
-            print("❌ No payment element successfully captured with tooltip")
+        except Exception as e:
+            print(f"❌ Payment hover capture failed: {e}")
+            traceback.print_exc()
 
         browser.close()
         print("\n=== Browser closed ===")
