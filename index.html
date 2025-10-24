@@ -13,6 +13,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   
   <style>
+    /* (Styles remain the same for appearance) */
     * {
       margin: 0;
       padding: 0;
@@ -287,13 +288,6 @@
 
     .loading.active {
       display: block;
-      /* Remove pulse effect to prevent the spinning message from blinking */
-      /* animation: pulse 1.5s ease-in-out infinite; */ 
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
     }
 
     .spinner {
@@ -442,7 +436,7 @@
     <section class="capture-section" id="capture">
       <div class="container">
         <h2>Run Compliance Capture</h2>
-        <p class="section-description">Enter the details below to initiate a compliant screenshot and PDF report generation.</p>
+        <p class="section-description">Select the store location and enter the stock number to generate the report.</p>
 
         <form action="/capture" method="POST" id="captureForm">
           <div class="form-group">
@@ -450,21 +444,16 @@
             <select id="location" name="location" required>
               <option value="">Select Location</option>
               <option value="bend">Bend (97701)</option>
-              <option value="eugene">Eugene (97402)</option>
+              <option value="eugene">Coburg (Eugene) (97408)</option>
               <option value="hillsboro">Hillsboro (97124)</option>
               <option value="medford">Medford (97504)</option>
-              <option value="portland">Portland (97201)</option>
+              <option value="portland">Wood Village (Portland) (97060)</option>
             </select>
           </div>
 
           <div class="form-group">
-            <label for="stock">Stock/VIN Number</label>
-            <input type="text" id="stock" name="stock" placeholder="e.g., 2607628p or 5W9C26070014023" required>
-          </div>
-
-          <div class="form-group">
-            <label for="zip">Customer Zip Code (For Payment Tool)</label>
-            <input type="text" id="zip" name="zip" placeholder="e.g., 97201" required>
+            <label for="stock">Stock Number</label>
+            <input type="text" id="stock" name="stock" placeholder="e.g., 2607628p" required>
           </div>
 
           <button type="submit" id="submitBtn">Run Capture</button>
@@ -519,17 +508,17 @@
           <div class="step">
             <div class="step-icon">1</div>
             <h3>Input Details</h3>
-            <p>User inputs the CW Location, Stock/VIN, and a Customer Zip Code into the form above.</p>
+            <p>User selects the CW Location and inputs the Stock Number into the simplified form.</p>
           </div>
           <div class="step">
             <div class="step-icon">2</div>
             <h3>Automated Capture</h3>
-            <p>The server launches a browser, navigates to the URL, and takes two precise screenshots (price/payment).</p>
+            <p>The server launches a browser, spoofs the store's location, and takes two precise screenshots (price/payment).</p>
           </div>
           <div class="step">
             <div class="step-icon">3</div>
             <h3>Report Generation</h3>
-            <p>The server combines the screenshots, metadata, and official timestamp into a final, portable PDF compliance report.</p>
+            <p>The server combines the screenshots, metadata, and official timestamp into a final, single-page PDF compliance report.</p>
           </div>
         </div>
       </div>
