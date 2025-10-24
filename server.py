@@ -293,7 +293,7 @@ def serve_shot(sid):
 @app.get("/history")
 def history():
     # Get filter parameters
-    location_filter = request.args.get("location", "").strip().lower()
+    location_filter = request.args.get("location", "").strip()
     stock_filter = request.args.get("stock", "").strip()
     sort_by = request.args.get("sort", "date_desc")
     
@@ -302,9 +302,11 @@ def history():
         params = []
         
         # Apply filters
-        if location_filter and location_filter != "all":
-            query += " AND LOWER(location) = ?"
-            params.append(location_filter)
+        if location_filter and location_filter.lower() != "all":
+            # Match against the capitalized location name (e.g., "Portland", "Bend")
+            location_name = location_filter.capitalize()
+            query += " AND location = ?"
+            params.append(location_name)
         
         if stock_filter:
             query += " AND stock LIKE ?"
