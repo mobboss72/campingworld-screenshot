@@ -1,4 +1,4 @@
-# server.py (Simplified and Corrected)
+# server.py
 import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io
 from flask import Flask, request, send_from_directory, Response, send_file, jsonify
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
@@ -38,6 +38,8 @@ CW_LOCATIONS = {
     "portland": {"name": "Wood Village (Portland)", "zip": "97060", "lat": 45.5458, "lon": -122.4208}, # Wood Village ZIP
 }
 
+# --- Flask App Initialization (CLEANED) ---
+app = Flask(__name__)
 
 # --- (Database and Utility functions remain the same) ---
 @contextmanager
@@ -234,8 +236,6 @@ def do_capture(url, lat, lon, store_zip_code, price_png, pay_png):
         # Simulate successful capture for demonstration
         all_debug.append(f"✓ Browser launched. Geolocation set to: {lat}, {lon} (Store ZIP: {store_zip_code})")
         # Ensure dummy files exist for the PDF generator to work
-        with open(price_png, 'w') as f: f.write('dummy')
-        with open(pay_png, 'w') as f: f.write('dummy')
         price_success = True
         
     except Exception as e:
@@ -335,6 +335,7 @@ def capture_rv():
 
 @app.get("/")
 def root():
+    # Looks for index.html in the current directory (which is where the user uploaded it)
     return send_from_directory(".", "index.html")
 
 # -------------------- Entrypoint --------------------
