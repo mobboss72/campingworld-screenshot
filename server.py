@@ -15,6 +15,9 @@ from contextlib import contextmanager
 from functools import wraps
 import threading
 
+# Admin password
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "cwadmin2025")  # Change this!
+
 # Persist Playwright downloads
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 
@@ -46,6 +49,7 @@ TSA_URLS = [
 screenshot_cache = {}
 
 app = Flask(__name__, static_folder=None)
+app.secret_key = os.getenv("SECRET_KEY", "cw-compliance-secret-key-change-me")  # Change this!
 
 # -------------------- Database --------------------
 
@@ -119,6 +123,35 @@ def schedule_cleanup():
 # Start cleanup scheduler
 schedule_cleanup()
 
+# -------------------- Admin Authentication --------------------
+
+def check_admin_auth():
+    """Check if admin is authenticated via session or basic auth"""
+    # Check session first
+    from flask import session
+    if session.get('admin_authenticated'):
+        return True
+    
+    # Check basic auth
+    auth = request.authorization
+    if auth and auth.password == ADMIN_PASSWORD:
+        return True
+    
+    return False
+
+def require_admin_auth(f):
+    """Decorator to require admin authentication"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if check_admin_auth():
+            return f(*args, **kwargs)
+        return Response(
+            'Authentication required',
+            401,
+            {'WWW-Authenticate': 'Basic realm="Admin Panel"'}
+        )
+    return decorated
+
 # -------------------- Cleanup Utilities --------------------
 
 def cleanup_old_files(days_old=90):
@@ -182,6 +215,7 @@ def cleanup_old_files(days_old=90):
         return {"cleaned": 0, "size_mb": 0}
 
 @app.get("/admin/cleanup")
+@require_admin_auth
 def admin_cleanup():
     """Manual cleanup endpoint"""
     days = request.args.get("days", AUTO_CLEANUP_DAYS, type=int)
@@ -189,6 +223,7 @@ def admin_cleanup():
     return jsonify({"cleaned": result["cleaned"], "size_mb": result["size_mb"], "days_old": days})
 
 @app.get("/admin/storage")
+@require_admin_auth
 def admin_storage():
     """View storage status"""
     try:
@@ -276,6 +311,291 @@ def admin_storage():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.get("/admin")
+@require_admin_auth
+def admin_dashboard():
+    """Admin dashboard"""
+    try:
+        # Get storage stats
+        with get_db() as conn:
+            total_captures = conn.execute("SELECT COUNT(*) as count FROM captures").fetchone()['count']
+            
+            # Captures by location
+            location_stats = conn.execute("""
+                SELECT location, COUNT(*) as count 
+                FROM captures 
+                GROUP BY location 
+                ORDER BY count DESC
+            """).fetchall()
+            
+            # Recent captures
+            recent_captures = conn.execute("""
+                SELECT id, stock, location, capture_utc, price_sha256, payment_sha256
+                FROM captures
+                ORDER BY created_at DESC
+                LIMIT 20
+            """).fetchall()
+            
+            # Captures per day (last 30 days)
+            daily_stats = conn.execute("""
+                SELECT DATE(created_at) as date, COUNT(*) as count
+                FROM captures
+                WHERE created_at >= DATE('now', '-30 days')
+                GROUP BY DATE(created_at)
+                ORDER BY date DESC
+            """).fetchall()
+        
+        # Calculate storage
+        temp_size = 0
+        persistent_size = 0
+        
+        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
+            for item in os.listdir(PERSISTENT_STORAGE_PATH):
+                if item.startswith("cw-"):
+                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    if os.path.isdir(item_path):
+                        for root, dirs, files in os.walk(item_path):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                if os.path.exists(fp):
+                                    persistent_size += os.path.getsize(fp)
+        
+        total_size_mb = (temp_size + persistent_size) / (1024 * 1024)
+        estimated_max_mb = 270 * 5  # 270 captures * 5MB
+        usage_percent = (total_size_mb / estimated_max_mb * 100) if estimated_max_mb > 0 else 0
+        
+        html = render_template_string("""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Admin Dashboard - CW Compliance</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, sans-serif; background: #f5f7fb; color: #1d1d1f; padding: 20px; }
+    .container { max-width: 1400px; margin: 0 auto; }
+    header { background: linear-gradient(135deg, #003087 0%, #0055a4 100%); color: white; padding: 24px; border-radius: 12px; margin-bottom: 24px; }
+    header h1 { font-size: 28px; margin-bottom: 8px; }
+    header p { opacity: 0.9; font-size: 14px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .stat-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .stat-card h3 { font-size: 14px; color: #6b7280; margin-bottom: 8px; font-weight: 500; }
+    .stat-card .value { font-size: 32px; font-weight: 700; color: #1d1d1f; }
+    .stat-card .subvalue { font-size: 13px; color: #9ca3af; margin-top: 4px; }
+    .section { background: white; padding: 24px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 24px; }
+    .section h2 { font-size: 20px; margin-bottom: 16px; color: #1d1d1f; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 12px; background: #f9fafb; font-weight: 600; font-size: 13px; color: #374151; }
+    td { padding: 12px; border-bottom: 1px solid #e5e7eb; font-size: 14px; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover { background: #f9fafb; }
+    .location-badge { display: inline-block; padding: 4px 10px; background: #e0e7ff; color: #3730a3; border-radius: 6px; font-size: 12px; font-weight: 600; }
+    .progress-bar { width: 100%; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #10b981 0%, #059669 100%); transition: width 0.3s; }
+    .btn { display: inline-block; padding: 10px 20px; background: #2563eb; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px; border: none; cursor: pointer; }
+    .btn:hover { background: #1d4ed8; }
+    .btn-secondary { background: #6b7280; }
+    .btn-secondary:hover { background: #4b5563; }
+    .btn-danger { background: #dc2626; }
+    .btn-danger:hover { background: #b91c1c; }
+    .actions { display: flex; gap: 12px; margin-top: 16px; }
+    .back-link { color: #2563eb; text-decoration: none; font-weight: 600; font-size: 14px; }
+    .back-link:hover { text-decoration: underline; }
+    code { font-family: 'Monaco', monospace; font-size: 11px; background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🔐 Admin Dashboard</h1>
+      <p>CW Compliance Capture Tool - System Overview</p>
+    </header>
+
+    <div style="margin-bottom: 16px;">
+      <a href="/" class="back-link">← Back to Main Site</a>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <h3>Total Captures</h3>
+        <div class="value">{{total_captures}}</div>
+        <div class="subvalue">All time</div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Storage Used</h3>
+        <div class="value">{{total_size_mb|round(2)}} MB</div>
+        <div class="subvalue">{{usage_percent|round(1)}}% of estimated max</div>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: {{usage_percent if usage_percent < 100 else 100}}%"></div>
+        </div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Storage Mode</h3>
+        <div class="value" style="font-size: 20px;">{{storage_mode.upper()}}</div>
+        <div class="subvalue">{{cleanup_days}} day retention</div>
+      </div>
+      
+      <div class="stat-card">
+        <h3>Estimated Max</h3>
+        <div class="value">{{estimated_max_mb|round(0)|int}} MB</div>
+        <div class="subvalue">270 captures @ 5MB each</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>📊 Captures by Location</h2>
+      {% if location_stats %}
+        <table>
+          <thead>
+            <tr>
+              <th>Location</th>
+              <th>Capture Count</th>
+              <th>Percentage</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for loc in location_stats %}
+            <tr>
+              <td><span class="location-badge">{{loc.location}}</span></td>
+              <td>{{loc.count}}</td>
+              <td>{{(loc.count / total_captures * 100)|round(1)}}%</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #6b7280;">No captures yet</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2>📅 Daily Activity (Last 30 Days)</h2>
+      {% if daily_stats %}
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Captures</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for day in daily_stats[:10] %}
+            <tr>
+              <td>{{day.date}}</td>
+              <td>{{day.count}}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #6b7280;">No recent activity</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2>🕐 Recent Captures</h2>
+      {% if recent_captures %}
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Stock</th>
+              <th>Location</th>
+              <th>Capture Time</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for capture in recent_captures[:10] %}
+            <tr>
+              <td>{{capture.id}}</td>
+              <td><strong>{{capture.stock}}</strong></td>
+              <td><span class="location-badge">{{capture.location}}</span></td>
+              <td>{{capture.capture_utc}}</td>
+              <td><a href="/view/{{capture.id}}" class="btn" style="padding: 6px 12px; font-size: 12px;">View PDF</a></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p style="color: #6b7280;">No captures yet</p>
+      {% endif %}
+    </div>
+
+    <div class="section">
+      <h2>🧹 Maintenance Actions</h2>
+      <p style="color: #6b7280; margin-bottom: 16px;">Manage storage and cleanup operations</p>
+      <div class="actions">
+        <button onclick="runCleanup()" class="btn btn-secondary">Run Cleanup Now</button>
+        <a href="/admin/storage" class="btn btn-secondary" target="_blank">View Storage API</a>
+        <a href="/history" class="btn">View All Captures</a>
+      </div>
+      <div id="cleanupResult" style="margin-top: 16px; padding: 12px; background: #f3f4f6; border-radius: 8px; display: none;"></div>
+    </div>
+
+    <div class="section">
+      <h2>⚙️ System Configuration</h2>
+      <table>
+        <tr>
+          <td><strong>Storage Mode</strong></td>
+          <td>{{storage_mode}}</td>
+        </tr>
+        <tr>
+          <td><strong>Auto Cleanup Days</strong></td>
+          <td>{{cleanup_days}} days</td>
+        </tr>
+        <tr>
+          <td><strong>Database Path</strong></td>
+          <td><code>{{db_path}}</code></td>
+        </tr>
+        <tr>
+          <td><strong>Persistent Storage Path</strong></td>
+          <td><code>{{storage_path}}</code></td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    async function runCleanup() {
+      const result = document.getElementById('cleanupResult');
+      result.style.display = 'block';
+      result.innerHTML = '⏳ Running cleanup...';
+      
+      try {
+        const response = await fetch('/admin/cleanup?days={{cleanup_days}}');
+        const data = await response.json();
+        result.innerHTML = `✅ Cleanup complete: Removed ${data.cleaned} directories, freed ${data.size_mb} MB`;
+        result.style.background = '#d1fae5';
+        result.style.color = '#065f46';
+      } catch (error) {
+        result.innerHTML = `❌ Cleanup failed: ${error.message}`;
+        result.style.background = '#fee2e2';
+        result.style.color = '#991b1b';
+      }
+    }
+  </script>
+</body>
+</html>
+        """, 
+        total_captures=total_captures,
+        location_stats=location_stats,
+        recent_captures=recent_captures,
+        daily_stats=daily_stats,
+        total_size_mb=total_size_mb,
+        estimated_max_mb=estimated_max_mb,
+        usage_percent=usage_percent,
+        storage_mode=STORAGE_MODE,
+        cleanup_days=AUTO_CLEANUP_DAYS,
+        db_path=DB_PATH,
+        storage_path=PERSISTENT_STORAGE_PATH
+        )
+        return Response(html, mimetype="text/html")
+    except Exception as e:
+        return Response(f"Error loading dashboard: {e}", status=500)
 
 # -------------------- Routes --------------------
 
@@ -701,68 +1021,74 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         story.append(Paragraph("Captured Disclosures", styles['Heading2']))
         story.append(Spacer(1, 0.1*inch))
         
-        images_row = []
-        labels_row = []
-        
+        # Price Disclosure (Top)
         if price_path and os.path.exists(price_path):
             try:
+                story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+                story.append(Spacer(1, 0.05*inch))
+                
                 img = PILImage.open(price_path)
-                img_width = 3.25*inch
+                # Full width for better readability
+                img_width = 7*inch
                 aspect = img.height / img.width
                 target_height = img_width * aspect
                 
-                if target_height > 6*inch:
-                    target_height = 6*inch
+                # Limit height to fit on page
+                if target_height > 3.5*inch:
+                    target_height = 3.5*inch
                     img_width = target_height / aspect
                 
                 img_obj = Image(price_path, width=img_width, height=target_height)
-                images_row.append(img_obj)
-                labels_row.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+                
+                # Center the image
+                img_table = Table([[img_obj]], colWidths=[7*inch])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                ]))
+                story.append(img_table)
+                story.append(Spacer(1, 0.15*inch))
             except Exception as e:
                 print(f"⚠ Error processing price image: {e}")
-                images_row.append(Paragraph("Price disclosure\navailable but\ncould not render", styles['Normal']))
-                labels_row.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+                story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
+                story.append(Spacer(1, 0.15*inch))
         else:
-            images_row.append(Paragraph("Price disclosure\nnot available", styles['Normal']))
-            labels_row.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+            story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+            story.append(Spacer(1, 0.05*inch))
+            story.append(Paragraph("Price disclosure not available", styles['Normal']))
+            story.append(Spacer(1, 0.15*inch))
         
+        # Payment Disclosure (Bottom)
         if pay_path and os.path.exists(pay_path):
             try:
+                story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+                story.append(Spacer(1, 0.05*inch))
+                
                 img = PILImage.open(pay_path)
-                img_width = 3.25*inch
+                img_width = 7*inch
                 aspect = img.height / img.width
                 target_height = img_width * aspect
                 
-                if target_height > 6*inch:
-                    target_height = 6*inch
+                if target_height > 3.5*inch:
+                    target_height = 3.5*inch
                     img_width = target_height / aspect
                 
                 img_obj = Image(pay_path, width=img_width, height=target_height)
-                images_row.append(img_obj)
-                labels_row.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+                
+                img_table = Table([[img_obj]], colWidths=[7*inch])
+                img_table.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                ]))
+                story.append(img_table)
+                story.append(Spacer(1, 0.15*inch))
             except Exception as e:
                 print(f"⚠ Error processing payment image: {e}")
-                images_row.append(Paragraph("Payment disclosure\navailable but\ncould not render", styles['Normal']))
-                labels_row.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+                story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
+                story.append(Spacer(1, 0.15*inch))
         else:
-            images_row.append(Paragraph("Payment disclosure\nnot available", styles['Normal']))
-            labels_row.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
-        
-        label_table = Table([labels_row], colWidths=[3.5*inch, 3.5*inch])
-        label_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTSIZE', (0, 0), (-1, -1), 11),
-        ]))
-        story.append(label_table)
-        story.append(Spacer(1, 0.1*inch))
-        
-        img_table = Table([images_row], colWidths=[3.5*inch, 3.5*inch])
-        img_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ]))
-        story.append(img_table)
-        story.append(Spacer(1, 0.2*inch))
+            story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+            story.append(Spacer(1, 0.05*inch))
+            story.append(Paragraph("Payment disclosure not available", styles['Normal']))
+            story.append(Spacer(1, 0.15*inch))
         
         story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
         hash_data = [
