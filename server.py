@@ -1,5 +1,6 @@
 # server.py
 import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io
+import re
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify, session
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from rfc3161ng import RemoteTimestamper, get_hash_oid
@@ -16,7 +17,7 @@ from functools import wraps
 import threading
 
 # Admin password
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "cwadmin2025")  # Change this!
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "cwadmin2025")
 
 # Persist Playwright downloads
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
@@ -25,9 +26,9 @@ PORT = int(os.getenv("PORT", "8080"))
 DB_PATH = os.getenv("DB_PATH", "/app/data/captures.db")
 
 # Storage configuration
-STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")  # Changed to persistent
+STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")
 PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", "/app/data/captures")
-AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))  # 90 days retention
+AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))
 
 # Oregon Camping World locations (alphabetical) with coordinates
 CW_LOCATIONS = {
@@ -49,7 +50,7 @@ TSA_URLS = [
 screenshot_cache = {}
 
 app = Flask(__name__, static_folder=None)
-app.secret_key = os.getenv("SECRET_KEY", "cw-compliance-secret-key-change-me")  # Change this!
+app.secret_key = os.getenv("SECRET_KEY", "cw-compliance-secret-key-change-me")
 
 # -------------------- Database --------------------
 
@@ -108,7 +109,7 @@ def schedule_cleanup():
     """Run cleanup every 24 hours"""
     def cleanup_task():
         while True:
-            time.sleep(24 * 60 * 60)  # 24 hours
+            time.sleep(24 * 60 * 60)
             print("🕐 Running scheduled cleanup...")
             try:
                 result = cleanup_old_files(AUTO_CLEANUP_DAYS)
@@ -120,19 +121,15 @@ def schedule_cleanup():
     cleanup_thread.start()
     print(f"✓ Automatic cleanup scheduled (every 24 hours, {AUTO_CLEANUP_DAYS} day retention)")
 
-# Start cleanup scheduler
 schedule_cleanup()
 
 # -------------------- Admin Authentication --------------------
 
 def check_admin_auth():
     """Check if admin is authenticated via session or basic auth"""
-    # Check session first
-    from flask import session
     if session.get('admin_authenticated'):
         return True
     
-    # Check basic auth
     auth = request.authorization
     if auth and auth.password == ADMIN_PASSWORD:
         return True
@@ -161,7 +158,6 @@ def cleanup_old_files(days_old=90):
         cleaned_count = 0
         cleaned_size = 0
         
-        # Clean up temp directories
         temp_base = tempfile.gettempdir()
         for item in os.listdir(temp_base):
             if item.startswith("cw-"):
@@ -170,7 +166,6 @@ def cleanup_old_files(days_old=90):
                     if os.path.isdir(item_path):
                         dir_mtime = os.path.getmtime(item_path)
                         if dir_mtime < cutoff_time:
-                            # Calculate size before deleting
                             for root, dirs, files in os.walk(item_path):
                                 for f in files:
                                     fp = os.path.join(root, f)
@@ -184,7 +179,6 @@ def cleanup_old_files(days_old=90):
                 except Exception as e:
                     print(f"⚠ Could not clean {item_path}: {e}")
         
-        # Clean up persistent storage if enabled
         if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
             for item in os.listdir(PERSISTENT_STORAGE_PATH):
                 if item.startswith("cw-"):
@@ -193,7 +187,6 @@ def cleanup_old_files(days_old=90):
                         if os.path.isdir(item_path):
                             dir_mtime = os.path.getmtime(item_path)
                             if dir_mtime < cutoff_time:
-                                # Calculate size before deleting
                                 for root, dirs, files in os.walk(item_path):
                                     for f in files:
                                         fp = os.path.join(root, f)
@@ -214,120 +207,27 @@ def cleanup_old_files(days_old=90):
         print(f"❌ Cleanup failed: {e}")
         return {"cleaned": 0, "size_mb": 0}
 
-@app.get("/admin/cleanup")
-@require_admin_auth
-def admin_cleanup():
-    """Manual cleanup endpoint"""
-    days = request.args.get("days", AUTO_CLEANUP_DAYS, type=int)
-    result = cleanup_old_files(days)
-    return jsonify({"cleaned": result["cleaned"], "size_mb": result["size_mb"], "days_old": days})
-
-@app.get("/admin/storage")
-@require_admin_auth
-def admin_storage():
-    """View storage status"""
-    try:
-        with get_db() as conn:
-            total_captures = conn.execute("SELECT COUNT(*) as count FROM captures").fetchone()['count']
-            
-            existing_pdfs = conn.execute(
-                "SELECT COUNT(*) as count FROM captures WHERE pdf_path IS NOT NULL"
-            ).fetchone()['count']
-            
-            files_exist = 0
-            files_missing = 0
-            for row in conn.execute("SELECT pdf_path FROM captures WHERE pdf_path IS NOT NULL"):
-                if row['pdf_path'] and os.path.exists(row['pdf_path']):
-                    files_exist += 1
-                else:
-                    files_missing += 1
-        
-        # Calculate temp storage
-        temp_size = 0
-        temp_dirs = 0
-        temp_base = tempfile.gettempdir()
-        for item in os.listdir(temp_base):
-            if item.startswith("cw-"):
-                item_path = os.path.join(temp_base, item)
-                if os.path.isdir(item_path):
-                    temp_dirs += 1
-                    for root, dirs, files in os.walk(item_path):
-                        for f in files:
-                            fp = os.path.join(root, f)
-                            if os.path.exists(fp):
-                                temp_size += os.path.getsize(fp)
-        
-        # Calculate persistent storage
-        persistent_size = 0
-        persistent_dirs = 0
-        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
-            for item in os.listdir(PERSISTENT_STORAGE_PATH):
-                if item.startswith("cw-"):
-                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
-                    if os.path.isdir(item_path):
-                        persistent_dirs += 1
-                        for root, dirs, files in os.walk(item_path):
-                            for f in files:
-                                fp = os.path.join(root, f)
-                                if os.path.exists(fp):
-                                    persistent_size += os.path.getsize(fp)
-        
-        temp_size_mb = temp_size / (1024 * 1024)
-        persistent_size_mb = persistent_size / (1024 * 1024)
-        total_size_mb = temp_size_mb + persistent_size_mb
-        
-        # Calculate estimated max storage (90 days, 3/day)
-        estimated_max_captures = 90 * 3  # 270 captures
-        estimated_max_size_mb = estimated_max_captures * 5  # ~5MB per capture
-        
-        return jsonify({
-            "storage_mode": STORAGE_MODE,
-            "auto_cleanup_days": AUTO_CLEANUP_DAYS,
-            "database": {
-                "total_captures": total_captures,
-                "pdfs_in_db": existing_pdfs,
-                "files_exist": files_exist,
-                "files_missing": files_missing
-            },
-            "temp_storage": {
-                "directories": temp_dirs,
-                "size_mb": round(temp_size_mb, 2)
-            },
-            "persistent_storage": {
-                "directories": persistent_dirs,
-                "size_mb": round(persistent_size_mb, 2)
-            },
-            "total_storage": {
-                "size_mb": round(total_size_mb, 2),
-                "size_gb": round(total_size_mb / 1024, 2)
-            },
-            "estimates": {
-                "max_captures_90_days": estimated_max_captures,
-                "estimated_max_size_mb": estimated_max_size_mb,
-                "estimated_max_size_gb": round(estimated_max_size_mb / 1024, 2),
-                "plan_limit_gb": 100,
-                "estimated_usage_percent": round((estimated_max_size_mb / 1024 / 100) * 100, 2)
-            }
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 # -------------------- Routes --------------------
 
 @app.get("/")
 def root():
     return send_from_directory(".", "index.html")
 
+@app.get("/screenshot/<sid>")
+def serve_shot(sid):
+    path = screenshot_cache.get(sid)
+    if not path or not os.path.exists(path):
+        return Response("Screenshot not found", status=404)
+    return send_file(path, mimetype="image/png")
+
 @app.get("/admin")
 @require_admin_auth
 def admin_dashboard():
     """Admin dashboard"""
     try:
-        # Get storage stats
         with get_db() as conn:
             total_captures = conn.execute("SELECT COUNT(*) as count FROM captures").fetchone()['count']
             
-            # Captures by location
             location_stats = conn.execute("""
                 SELECT location, COUNT(*) as count 
                 FROM captures 
@@ -335,7 +235,6 @@ def admin_dashboard():
                 ORDER BY count DESC
             """).fetchall()
             
-            # Recent captures
             recent_captures = conn.execute("""
                 SELECT id, stock, location, capture_utc, price_sha256, payment_sha256
                 FROM captures
@@ -343,7 +242,6 @@ def admin_dashboard():
                 LIMIT 20
             """).fetchall()
             
-            # Captures per day (last 30 days)
             daily_stats = conn.execute("""
                 SELECT DATE(created_at) as date, COUNT(*) as count
                 FROM captures
@@ -352,7 +250,6 @@ def admin_dashboard():
                 ORDER BY date DESC
             """).fetchall()
         
-        # Calculate storage
         temp_size = 0
         persistent_size = 0
         
@@ -368,7 +265,7 @@ def admin_dashboard():
                                     persistent_size += os.path.getsize(fp)
         
         total_size_mb = (temp_size + persistent_size) / (1024 * 1024)
-        estimated_max_mb = 270 * 5  # 270 captures * 5MB
+        estimated_max_mb = 270 * 5
         usage_percent = (total_size_mb / estimated_max_mb * 100) if estimated_max_mb > 0 else 0
         
         html = render_template_string("""
@@ -403,12 +300,9 @@ def admin_dashboard():
     .btn:hover { background: #1d4ed8; }
     .btn-secondary { background: #6b7280; }
     .btn-secondary:hover { background: #4b5563; }
-    .btn-danger { background: #dc2626; }
-    .btn-danger:hover { background: #b91c1c; }
     .actions { display: flex; gap: 12px; margin-top: 16px; }
     .back-link { color: #2563eb; text-decoration: none; font-weight: 600; font-size: 14px; }
     .back-link:hover { text-decoration: underline; }
-    code { font-family: 'Monaco', monospace; font-size: 11px; background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
   </style>
 </head>
 <body>
@@ -555,11 +449,11 @@ def admin_dashboard():
         </tr>
         <tr>
           <td><strong>Database Path</strong></td>
-          <td><code>{{db_path}}</code></td>
+          <td>{{db_path}}</td>
         </tr>
         <tr>
           <td><strong>Persistent Storage Path</strong></td>
-          <td><code>{{storage_path}}</code></td>
+          <td>{{storage_path}}</td>
         </tr>
       </table>
     </div>
@@ -601,24 +495,92 @@ def admin_dashboard():
         )
         return Response(html, mimetype="text/html")
     except Exception as e:
+        traceback.print_exc()
         return Response(f"Error loading dashboard: {e}", status=500)
 
-# -------------------- Routes --------------------
+@app.get("/admin/cleanup")
+@require_admin_auth
+def admin_cleanup():
+    """Manual cleanup endpoint"""
+    days = request.args.get("days", AUTO_CLEANUP_DAYS, type=int)
+    result = cleanup_old_files(days)
+    return jsonify({"cleaned": result["cleaned"], "size_mb": result["size_mb"], "days_old": days})
 
-@app.get("/")
-def root():
-    return send_from_directory(".", "index.html")
-
-@app.get("/screenshot/<sid>")
-def serve_shot(sid):
-    path = screenshot_cache.get(sid)
-    if not path or not os.path.exists(path):
-        return Response("Screenshot not found", status=404)
-    return send_file(path, mimetype="image/png")
+@app.get("/admin/storage")
+@require_admin_auth
+def admin_storage():
+    """View storage status"""
+    try:
+        with get_db() as conn:
+            total_captures = conn.execute("SELECT COUNT(*) as count FROM captures").fetchone()['count']
+            
+            existing_pdfs = conn.execute(
+                "SELECT COUNT(*) as count FROM captures WHERE pdf_path IS NOT NULL"
+            ).fetchone()['count']
+            
+            files_exist = 0
+            files_missing = 0
+            for row in conn.execute("SELECT pdf_path FROM captures WHERE pdf_path IS NOT NULL"):
+                if row['pdf_path'] and os.path.exists(row['pdf_path']):
+                    files_exist += 1
+                else:
+                    files_missing += 1
+        
+        temp_size = 0
+        persistent_size = 0
+        
+        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
+            for item in os.listdir(PERSISTENT_STORAGE_PATH):
+                if item.startswith("cw-"):
+                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    if os.path.isdir(item_path):
+                        for root, dirs, files in os.walk(item_path):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                if os.path.exists(fp):
+                                    persistent_size += os.path.getsize(fp)
+        
+        temp_size_mb = temp_size / (1024 * 1024)
+        persistent_size_mb = persistent_size / (1024 * 1024)
+        total_size_mb = temp_size_mb + persistent_size_mb
+        
+        estimated_max_captures = 90 * 3
+        estimated_max_size_mb = estimated_max_captures * 5
+        
+        return jsonify({
+            "storage_mode": STORAGE_MODE,
+            "auto_cleanup_days": AUTO_CLEANUP_DAYS,
+            "database": {
+                "total_captures": total_captures,
+                "pdfs_in_db": existing_pdfs,
+                "files_exist": files_exist,
+                "files_missing": files_missing
+            },
+            "temp_storage": {
+                "directories": 0,
+                "size_mb": round(temp_size_mb, 2)
+            },
+            "persistent_storage": {
+                "directories": len([i for i in os.listdir(PERSISTENT_STORAGE_PATH) if i.startswith("cw-")]) if os.path.exists(PERSISTENT_STORAGE_PATH) else 0,
+                "size_mb": round(persistent_size_mb, 2)
+            },
+            "total_storage": {
+                "size_mb": round(total_size_mb, 2),
+                "size_gb": round(total_size_mb / 1024, 2)
+            },
+            "estimates": {
+                "max_captures_90_days": estimated_max_captures,
+                "estimated_max_size_mb": estimated_max_size_mb,
+                "estimated_max_size_gb": round(estimated_max_size_mb / 1024, 2),
+                "plan_limit_gb": 100,
+                "estimated_usage_percent": round((estimated_max_size_mb / 1024 / 100) * 100, 2)
+            }
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.get("/history")
 def history():
-    # Get filter parameters
     location_filter = request.args.get("location", "").strip()
     stock_filter = request.args.get("stock", "").strip()
     sort_by = request.args.get("sort", "date_desc")
@@ -627,9 +589,7 @@ def history():
         query = "SELECT id, stock, location, capture_utc, price_sha256, payment_sha256 FROM captures WHERE 1=1"
         params = []
         
-        # Apply filters
         if location_filter and location_filter.lower() != "all":
-            # Match against the capitalized location name (e.g., "Portland", "Bend")
             location_name = location_filter.capitalize()
             query += " AND location = ?"
             params.append(location_name)
@@ -638,7 +598,6 @@ def history():
             query += " AND stock LIKE ?"
             params.append(f"%{stock_filter}%")
         
-        # Apply sorting
         if sort_by == "date_asc":
             query += " ORDER BY created_at ASC"
         elif sort_by == "stock_asc":
@@ -647,7 +606,7 @@ def history():
             query += " ORDER BY stock DESC"
         elif sort_by == "location":
             query += " ORDER BY location ASC, created_at DESC"
-        else:  # date_desc (default)
+        else:
             query += " ORDER BY created_at DESC"
         
         query += " LIMIT 100"
@@ -830,11 +789,11 @@ def view_capture(capture_id):
 @app.post("/capture")
 def capture():
     try:
-        stock = (request.form.get("stock") or "").strip()
+        stock = (request.form.get("stock") or "").strip().upper()
         location = (request.form.get("location") or "portland").strip().lower()
         
-        if not stock.isdigit():
-            return Response("Invalid stock number", status=400)
+        if not re.match(r'^\d+[A-Z]*$', stock):
+            return Response("Invalid stock number - must be digits optionally followed by letters", status=400)
         
         if location not in CW_LOCATIONS:
             return Response("Invalid location", status=400)
@@ -954,7 +913,7 @@ a{{color:#2563eb}}</style>
 def generate_pdf(stock, location, zip_code, url, utc_time, https_date, 
                  price_path, pay_path, sha_price, sha_pay, 
                  rfc_price, rfc_pay, debug_info):
-    """Generate PDF report with screenshots side by side"""
+    """Generate PDF report with screenshots stacked vertically"""
     try:
         if price_path:
             tmpdir = os.path.dirname(price_path)
@@ -1027,74 +986,101 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
         story.append(Paragraph("Captured Disclosures", styles['Heading2']))
         story.append(Spacer(1, 0.1*inch))
         
-        # Price Disclosure (Top)
-        if price_path and os.path.exists(price_path):
-            try:
+        no_matches = "No Matches Found" in debug_info
+
+        if no_matches:
+            story.append(Paragraph("<b>No Matches Found</b>", styles['Normal']))
+            story.append(Spacer(1, 0.05*inch))
+            story.append(Paragraph("Current stock number is not being advertised online. This screenshot confirms that no pricing information was available at the time of capture, preventing any claims of online price discrepancies.", styles['Normal']))
+            story.append(Spacer(1, 0.15*inch))
+            
+            if price_path and os.path.exists(price_path):
+                try:
+                    img = PILImage.open(price_path)
+                    img_width = 7*inch
+                    aspect = img.height / img.width
+                    target_height = img_width * aspect
+                    
+                    if target_height > 3.5*inch:
+                        target_height = 3.5*inch
+                        img_width = target_height / aspect
+                    
+                    img_obj = Image(price_path, width=img_width, height=target_height)
+                    
+                    img_table = Table([[img_obj]], colWidths=[7*inch])
+                    img_table.setStyle(TableStyle([
+                        ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                    ]))
+                    story.append(img_table)
+                    story.append(Spacer(1, 0.15*inch))
+                except Exception as e:
+                    print(f"⚠ Error processing error page image: {e}")
+                    story.append(Paragraph("Error page available but could not render", styles['Normal']))
+                    story.append(Spacer(1, 0.15*inch))
+        else:
+            if price_path and os.path.exists(price_path):
+                try:
+                    story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
+                    story.append(Spacer(1, 0.05*inch))
+                    
+                    img = PILImage.open(price_path)
+                    img_width = 7*inch
+                    aspect = img.height / img.width
+                    target_height = img_width * aspect
+                    
+                    if target_height > 3.5*inch:
+                        target_height = 3.5*inch
+                        img_width = target_height / aspect
+                    
+                    img_obj = Image(price_path, width=img_width, height=target_height)
+                    
+                    img_table = Table([[img_obj]], colWidths=[7*inch])
+                    img_table.setStyle(TableStyle([
+                        ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                    ]))
+                    story.append(img_table)
+                    story.append(Spacer(1, 0.15*inch))
+                except Exception as e:
+                    print(f"⚠ Error processing price image: {e}")
+                    story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
+                    story.append(Spacer(1, 0.15*inch))
+            else:
                 story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
                 story.append(Spacer(1, 0.05*inch))
-                
-                img = PILImage.open(price_path)
-                # Full width for better readability
-                img_width = 7*inch
-                aspect = img.height / img.width
-                target_height = img_width * aspect
-                
-                # Limit height to fit on page
-                if target_height > 3.5*inch:
-                    target_height = 3.5*inch
-                    img_width = target_height / aspect
-                
-                img_obj = Image(price_path, width=img_width, height=target_height)
-                
-                # Center the image
-                img_table = Table([[img_obj]], colWidths=[7*inch])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-                ]))
-                story.append(img_table)
+                story.append(Paragraph("Price disclosure not available", styles['Normal']))
                 story.append(Spacer(1, 0.15*inch))
-            except Exception as e:
-                print(f"⚠ Error processing price image: {e}")
-                story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
-                story.append(Spacer(1, 0.15*inch))
-        else:
-            story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
-            story.append(Spacer(1, 0.05*inch))
-            story.append(Paragraph("Price disclosure not available", styles['Normal']))
-            story.append(Spacer(1, 0.15*inch))
-        
-        # Payment Disclosure (Bottom)
-        if pay_path and os.path.exists(pay_path):
-            try:
+            
+            if pay_path and os.path.exists(pay_path):
+                try:
+                    story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
+                    story.append(Spacer(1, 0.05*inch))
+                    
+                    img = PILImage.open(pay_path)
+                    img_width = 7*inch
+                    aspect = img.height / img.width
+                    target_height = img_width * aspect
+                    
+                    if target_height > 3.5*inch:
+                        target_height = 3.5*inch
+                        img_width = target_height / aspect
+                    
+                    img_obj = Image(pay_path, width=img_width, height=target_height)
+                    
+                    img_table = Table([[img_obj]], colWidths=[7*inch])
+                    img_table.setStyle(TableStyle([
+                        ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                    ]))
+                    story.append(img_table)
+                    story.append(Spacer(1, 0.15*inch))
+                except Exception as e:
+                    print(f"⚠ Error processing payment image: {e}")
+                    story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
+                    story.append(Spacer(1, 0.15*inch))
+            else:
                 story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
                 story.append(Spacer(1, 0.05*inch))
-                
-                img = PILImage.open(pay_path)
-                img_width = 7*inch
-                aspect = img.height / img.width
-                target_height = img_width * aspect
-                
-                if target_height > 3.5*inch:
-                    target_height = 3.5*inch
-                    img_width = target_height / aspect
-                
-                img_obj = Image(pay_path, width=img_width, height=target_height)
-                
-                img_table = Table([[img_obj]], colWidths=[7*inch])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-                ]))
-                story.append(img_table)
+                story.append(Paragraph("Payment disclosure not available", styles['Normal']))
                 story.append(Spacer(1, 0.15*inch))
-            except Exception as e:
-                print(f"⚠ Error processing payment image: {e}")
-                story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
-                story.append(Spacer(1, 0.15*inch))
-        else:
-            story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
-            story.append(Spacer(1, 0.05*inch))
-            story.append(Paragraph("Payment disclosure not available", styles['Normal']))
-            story.append(Spacer(1, 0.15*inch))
         
         story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
         hash_data = [
@@ -1185,181 +1171,61 @@ def find_and_trigger_tooltip(page, label_text, tooltip_name):
     try:
         page.wait_for_timeout(1500)
         
-        all_labels = page.locator(f"text={label_text}").all()
-        debug.append(f"Found {len(all_labels)} instances of '{label_text}'")
-        
-        if len(all_labels) == 0:
-            debug.append(f"❌ No instances found - element may not exist on page")
+        all_labels = page.locator(f"text={label_text}")
+        if all_labels.count() == 0:
+            debug.append("⚠ No labels found with text")
             return False, "\n".join(debug)
         
-        success = False
-        for idx, label in enumerate(all_labels):
+        for i in range(all_labels.count()):
+            label = all_labels.nth(i)
             try:
-                is_visible = label.is_visible(timeout=1000)
-                if not is_visible:
-                    debug.append(f"  Instance {idx}: not visible, skipping")
-                    continue
-                
-                debug.append(f"  Instance {idx}: visible, attempting trigger")
-                
-                label.scroll_into_view_if_needed(timeout=3000)
-                page.wait_for_timeout(800)
-                
-                icon_found = False
-                
-                try:
-                    parent = label.locator("xpath=..").first
-                    svg_icons = parent.locator("svg.MuiSvgIcon-root").all()
-                    
-                    debug.append(f"    Found {len(svg_icons)} SVG icons in parent")
-                    
-                    for svg_idx, svg_icon in enumerate(svg_icons):
-                        try:
-                            if svg_icon.is_visible(timeout=500):
-                                debug.append(f"    Attempting to click SVG icon {svg_idx}...")
-                                svg_icon.click(timeout=2000, force=True)
-                                page.wait_for_timeout(1000)
-                                icon_found = True
-                                debug.append(f"    ✓ Clicked SVG icon {svg_idx}")
-                                break
-                        except Exception as e:
-                            debug.append(f"    SVG {svg_idx} click failed: {str(e)[:100]}")
-                            continue
-                            
-                except Exception as e:
-                    debug.append(f"    Parent SVG search failed: {str(e)[:100]}")
-                
-                if not icon_found:
-                    try:
-                        debug.append(f"    Trying data-testid selectors...")
-                        info_selectors = [
-                            '[data-testid*="info"]',
-                            '[data-testid*="Info"]',
-                            'svg[data-testid]',
-                        ]
-                        
-                        for selector in info_selectors:
-                            nearby_icons = page.locator(selector).all()
-                            if len(nearby_icons) > 0:
-                                debug.append(f"    Found {len(nearby_icons)} with {selector}")
-                                for icon in nearby_icons:
-                                    try:
-                                        if icon.is_visible(timeout=500):
-                                            icon.click(timeout=2000, force=True)
-                                            page.wait_for_timeout(1000)
-                                            icon_found = True
-                                            debug.append(f"    ✓ Clicked icon via {selector}")
-                                            break
-                                    except:
-                                        continue
-                            if icon_found:
-                                break
-                    except Exception as e:
-                        debug.append(f"    data-testid search failed: {str(e)[:100]}")
-                
-                if not icon_found:
-                    debug.append(f"    No icon found, hovering label as fallback...")
-                    try:
-                        label.hover(timeout=2000, force=True)
-                        page.wait_for_timeout(1200)
-                        debug.append(f"    ✓ Hovered label")
-                    except Exception as e:
-                        debug.append(f"    Hover failed: {str(e)[:100]}")
-                
-                page.wait_for_timeout(1500)
-                
-                tooltip_selectors = [
-                    "[role='tooltip']",
-                    ".MuiTooltip-popper",
-                    ".MuiTooltip-tooltip",
-                    ".MuiPopper-root",
-                ]
-                
-                tooltip_found = False
-                for selector in tooltip_selectors:
-                    try:
-                        tooltips = page.locator(selector).all()
-                        for tooltip in tooltips:
-                            if tooltip.is_visible(timeout=1000):
-                                debug.append(f"    ✓ Tooltip visible with: {selector}")
-                                page.wait_for_timeout(1000)
-                                tooltip_found = True
-                                success = True
-                                break
-                        if tooltip_found:
-                            break
-                    except:
-                        continue
-                
-                if success:
-                    debug.append(f"  ✓ Successfully triggered tooltip from instance {idx}")
-                    break
-                else:
-                    debug.append(f"    ⚠ No tooltip appeared for instance {idx}")
-                    
-            except Exception as e:
-                debug.append(f"  Instance {idx} failed: {str(e)[:150]}")
-                continue
-        
-        if not success:
-            debug.append("⚠ All standard methods failed, trying JavaScript injection...")
+                label.scroll_into_view_if_needed(timeout=2000)
+                debug.append(f"✓ Scrolled to label {i+1}/{all_labels.count()}")
+            except:
+                debug.append(f"⚠ Scroll to label {i+1} failed")
+            
             try:
-                result = page.evaluate(f"""
-                    () => {{
-                        const labels = Array.from(document.querySelectorAll('*'))
-                            .filter(el => el.textContent.trim() === '{label_text}');
-                        
-                        console.log('JS: Found', labels.length, 'label elements');
-                        
-                        for (const label of labels) {{
-                            const parent = label.parentElement;
-                            if (!parent) continue;
-                            
-                            const svg = parent.querySelector('svg');
-                            if (svg) {{
-                                console.log('JS: Found SVG, triggering events');
-                                svg.scrollIntoView({{behavior: 'smooth', block: 'center'}});
-                                
-                                setTimeout(() => {{
-                                    ['mouseenter', 'mouseover', 'mousemove', 'click'].forEach(eventType => {{
-                                        svg.dispatchEvent(new MouseEvent(eventType, {{
-                                            bubbles: true,
-                                            cancelable: true,
-                                            view: window
-                                        }}));
-                                    }});
-                                }}, 500);
-                                
-                                return true;
-                            }}
-                        }}
-                        return false;
-                    }}
-                """)
-                
-                if result:
-                    page.wait_for_timeout(2000)
-                    debug.append("✓ JavaScript fallback executed - events dispatched")
-                    
-                    for selector in tooltip_selectors:
-                        try:
-                            if page.locator(selector).first.is_visible(timeout=2000):
-                                debug.append(f"✓ Tooltip appeared after JS fallback: {selector}")
-                                success = True
-                                break
-                        except:
-                            continue
-                else:
-                    debug.append("⚠ JavaScript fallback: no SVG elements found")
-                    
-            except Exception as e:
-                debug.append(f"JavaScript fallback error: {str(e)[:150]}")
+                label.hover(timeout=2000)
+                debug.append(f"✓ Hovered label {i+1}")
+                page.wait_for_timeout(500)
+            except:
+                debug.append(f"⚠ Hover failed for label {i+1}")
+            
+            tooltip = page.locator("[role='tooltip'], .tooltip, .popover, [class*='tooltip'], [class*='Popover']")
+            if tooltip.count() > 0 and tooltip.is_visible():
+                debug.append(f"✓ Tooltip visible after hover on label {i+1}")
+                return True, "\n".join(debug)
         
-        return success, "\n".join(debug)
+        debug.append("⚠ Direct hover failed - trying JavaScript fallback")
+        
+        try:
+            success = page.evaluate("""
+                () => {
+                    const svgs = document.querySelectorAll('svg');
+                    for (let svg of svgs) {
+                        if (svg.parentElement && svg.parentElement.textContent.includes('?')) {
+                            svg.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
+                            svg.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true}));
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+            if success:
+                page.wait_for_timeout(500)
+                debug.append("✓ JavaScript fallback triggered tooltip")
+                return True, "\n".join(debug)
+            else:
+                debug.append("⚠ JavaScript fallback: no SVG elements found")
+                    
+        except Exception as e:
+            debug.append(f"JavaScript fallback error: {str(e)[:150]}")
+        
+        return False, "\n".join(debug)
         
     except Exception as e:
-        debug.append(f"❌ Critical Error: {str(e)}")
-        traceback.print_exc()
+        debug.append(f"❌ Tooltip trigger error: {str(e)[:150]}")
         return False, "\n".join(debug)
 
 def do_capture(stock, zip_code, location_name, latitude, longitude):
@@ -1416,6 +1282,18 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
                 all_debug.append("✓ Network idle reached")
             except:
                 all_debug.append("⚠ Network idle timeout (continuing anyway)")
+            
+            # Check for "No Matches Found"
+            if "No Matches Found" in page.content():
+                all_debug.append("⚠ No Matches Found - capturing error page")
+                page.screenshot(path=price_png, full_page=True)
+                size = os.path.getsize(price_png)
+                all_debug.append(f"✓ Error page screenshot saved: {size} bytes")
+                print(f"✓ Error page screenshot: {size} bytes")
+                browser.close()
+                all_debug.append("\n✓ Browser closed")
+                debug_output = "\n".join(all_debug)
+                return price_png, None, url, debug_output
             
             try:
                 page.evaluate(f"""
