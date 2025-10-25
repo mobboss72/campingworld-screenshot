@@ -1681,6 +1681,44 @@ a{{color:#2563eb}}</style>
         print("❌ /capture failed:", e, file=sys.stderr)
         traceback.print_exc()
         return Response(f"Error: {e}", status=500)
+from flask import send_file
+from PIL import Image
+from PyPDF2 import PdfMerger, PdfReader
+from playwright.sync_api import sync_playwright
+import io
+import os
+
+def capture_sign_as_pdf(stock_number):
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        url = f"https://rv-sign-builder-862473457030.us-central1.run.app/?stockNumber={stock_number}"
+        page.goto(url)
+        page.wait_for_selector('div.rv-sign-container.relative.w-full.max-w-5xl.p-5.b.')
+        element = page.locator('div.rv-sign-container.relative.w-full.max-w-5xl.p-5.b.')
+        screenshot_bytes = element.screenshot(type="png")
+        browser.close()
+    img = Image.open(io.BytesIO(screenshot_bytes)).convert("RGB")
+    img_pdf_bytes = io.BytesIO()
+    img.save(img_pdf_bytes, format='PDF')
+    img_pdf_bytes.seek(0)
+    return img_pdf_bytes
+
+@app.route("/capture_merged_pdf", methods=["POST", "GET"])
+def capture_and_merge():
+    stock_number = request.values.get("stockNumber")
+    existing_pdf_path = request.values.get("inputPdf", "input.pdf")
+    output_pdf_path = request.values.get("outputPdf", "output.pdf")
+    if not stock_number or not os.path.exists(existing_pdf_path):
+        return jsonify({"error": "stockNumber and inputPdf file required"}), 400
+    sign_pdf = capture_sign_as_pdf(stock_number)
+    merger = PdfMerger()
+    with open(existing_pdf_path, 'rb') as existing:
+        merger.append(PdfReader(existing))
+    merger.append(PdfReader(sign_pdf))
+    with open(output_pdf_path, 'wb') as result:
+        merger.write(result)
+    return send_file(output_pdf_path, mimetype="application/pdf", as_attachment=True, download_name=os.path.basename(output_pdf_path))
 
 # -------------------- Entrypoint --------------------
 
