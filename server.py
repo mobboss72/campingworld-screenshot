@@ -214,16 +214,8 @@ def get_rfc3161_timestamp(file_path):
 
     try:
         from rfc3161ng import RemoteTimestamper, decode_timestamp_response
-    except ImportError as e:
-        print(f"\n{'='*60}")
-        print(f"❌ CRITICAL: rfc3161ng library not installed!")
-        print(f"{'='*60}")
-        print(f"Error: {e}")
-        print(f"\nTo fix this, run:")
-        print(f"  pip install rfc3161ng --break-system-packages")
-        print(f"\nOr if using a virtual environment:")
-        print(f"  pip install rfc3161ng")
-        print(f"{'='*60}\n")
+    except Exception as e:
+        print(f"✗ rfc3161ng not available: {e}")
         return None
 
     for tsa_url in TSA_URLS:
@@ -471,18 +463,33 @@ def generate_pdf(
             # No screenshots; just leave the footer space
             pass
 
-        # === Footer positioning: Build from BOTTOM UP ===
-        # RFC section: starts at bottom margin, goes up
-        rfc_start_y = margin + rfc_h  # Start at bottom + height = top of RFC section
+        # === Footer positioning: EXPLICIT bottom-up layout ===
+        # Page is 11 inches tall (792 points), margin is typically 0.35"
+        # We need to draw from the bottom margin upward
         
-        # SHA section: starts above RFC section
-        sha_start_y = rfc_start_y + hashes_h  # Start at top of RFC + SHA height
+        # Calculate where each section should start (Y coordinate = top of that section)
+        # RFC section is at the very bottom
+        rfc_section_top = margin + rfc_h
         
-        # Footer ends at top of SHA section
-        footer_top = sha_start_y
+        # SHA section sits directly above RFC section  
+        sha_section_top = rfc_section_top + hashes_h
+        
+        # Update footer_top for image placement calculations
+        footer_top = sha_section_top
+        
+        print(f"\n=== PDF FOOTER DEBUG ===")
+        print(f"Page height: {page_h} points ({page_h/inch:.2f} inches)")
+        print(f"Margin: {margin} points ({margin/inch:.2f} inches)")
+        print(f"SHA section height: {hashes_h} points ({hashes_h/inch:.2f} inches)")
+        print(f"RFC section height: {rfc_h} points ({rfc_h/inch:.2f} inches)")
+        print(f"Footer total height: {footer_needed} points ({footer_needed/inch:.2f} inches)")
+        print(f"RFC section top (Y): {rfc_section_top} points ({rfc_section_top/inch:.2f} inches from bottom)")
+        print(f"SHA section top (Y): {sha_section_top} points ({sha_section_top/inch:.2f} inches from bottom)")
+        print(f"======================\n")
 
-        # === Draw SHA-256 section (from sha_start_y, drawing downward) ===
-        y = sha_start_y
+        # === Draw SHA-256 section ===
+        y = sha_section_top
+        print(f"Drawing 'SHA-256 Verification' at Y={y} ({y/inch:.2f} inches from bottom)")
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "SHA-256 Verification")
         y -= 0.16 * inch
@@ -490,6 +497,7 @@ def generate_pdf(
 
         def draw_hash(label, value, y):
             txt = f"{label}: {value or 'N/A'}"
+            print(f"Drawing hash '{label}' starting at Y={y} ({y/inch:.2f} inches from bottom)")
             used_h = draw_wrapped_line(txt, margin, y, max_text_width, font="Courier", size=7, leading=9)
             return y - used_h
 
@@ -498,15 +506,16 @@ def generate_pdf(
         if sha_pay and sha_pay != "N/A":
             y = draw_hash("Payment Disclosure", sha_pay, y)
 
-        # === Draw RFC-3161 section (from rfc_start_y, drawing downward) ===
-        y = rfc_start_y
+        # === Draw RFC-3161 section ===
+        y = rfc_section_top
+        print(f"Drawing 'RFC-3161 Timestamps' at Y={y} ({y/inch:.2f} inches from bottom)")
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "RFC-3161 Timestamps")
         y -= 0.16 * inch
         c.setFont("Helvetica", 8)
 
         def draw_rfc(label, data, y):
-            if not data or not data.get('timestamp') or data.get('timestamp') == 'N/A':
+            if not data:
                 c.drawString(margin, y, f"{label}: N/A")
                 return y - 0.14 * inch
             lines = [
@@ -1555,8 +1564,8 @@ def view_capture(capture_id):
     price_path = price_path if (price_path and os.path.exists(price_path)) else None
     pay_path   = pay_path   if (pay_path and os.path.exists(pay_path))   else None
 
-    rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None} if (capture['price_tsa'] and capture['price_timestamp']) else None
-    rfc_pay   = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None} if (capture['payment_tsa'] and capture['payment_timestamp']) else None
+    rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None} if capture['price_tsa'] else None
+    rfc_pay   = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None} if capture['payment_tsa'] else None
 
     # --- AUTO-STAMP SAFETY NET: If missing OR explicitly requested via restamp, stamp now (when file exists) ---
     updated = {}
@@ -1648,42 +1657,14 @@ def capture():
 
         rfc_price = None
         rfc_pay = None
-        
-        print("\n" + "="*60)
-        print("RFC-3161 TIMESTAMP GENERATION")
-        print("="*60)
-        
         try:
-            if price_ok:
-                print(f"🕐 Attempting RFC-3161 timestamp for PRICE screenshot...")
-                print(f"   File: {price_path}")
-                print(f"   Size: {os.path.getsize(price_path)} bytes")
-                rfc_price = get_rfc3161_timestamp(price_path)
-                if rfc_price:
-                    print(f"✓ SUCCESS - Price timestamp: {rfc_price.get('timestamp')}")
-                    print(f"   TSA: {rfc_price.get('tsa')}")
-                else:
-                    print(f"✗ FAILED - No timestamp obtained for price (all TSAs failed)")
+            rfc_price = get_rfc3161_timestamp(price_path) if price_ok else None
         except Exception as e:
-            print(f"❌ EXCEPTION - RFC 3161 timestamp failed for price: {e}")
-            traceback.print_exc()
-            
+            print(f"⚠ RFC 3161 timestamp failed for price: {e}")
         try:
-            if pay_ok:
-                print(f"\n🕐 Attempting RFC-3161 timestamp for PAYMENT screenshot...")
-                print(f"   File: {pay_path}")
-                print(f"   Size: {os.path.getsize(pay_path)} bytes")
-                rfc_pay = get_rfc3161_timestamp(pay_path)
-                if rfc_pay:
-                    print(f"✓ SUCCESS - Payment timestamp: {rfc_pay.get('timestamp')}")
-                    print(f"   TSA: {rfc_pay.get('tsa')}")
-                else:
-                    print(f"✗ FAILED - No timestamp obtained for payment (all TSAs failed)")
+            rfc_pay = get_rfc3161_timestamp(pay_path) if pay_ok else None
         except Exception as e:
-            print(f"❌ EXCEPTION - RFC 3161 timestamp failed for payment: {e}")
-            traceback.print_exc()
-            
-        print("="*60 + "\n")
+            print(f"⚠ RFC 3161 timestamp failed for payment: {e}")
 
         if rfc_price:
             debug_info += f"\nRFC3161_PRICE_OK={rfc_price.get('timestamp')}"
