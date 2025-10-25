@@ -9,18 +9,30 @@ from contextlib import contextmanager
 from functools import wraps
 import threading
 
-# -------------------- Config --------------------
+# -------------------- Railway-friendly defaults & config --------------------
 
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "cwadmin2025")  # Change this!
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
+
+# Detect Railway and pick writable defaults
+IS_RAILWAY = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID") or os.getenv("RAILWAY_STATIC_URL"))
+DEFAULT_DATA_DIR = os.getenv("DATA_DIR", "/data" if IS_RAILWAY else tempfile.gettempdir())
+
+# Persist Playwright downloads and app data under a writable dir
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.join(DEFAULT_DATA_DIR, "ms-playwright"))
 
 PORT = int(os.getenv("PORT", "8080"))
-DB_PATH = os.getenv("DB_PATH", "/app/data/captures.db")
+DB_PATH = os.getenv("DB_PATH", os.path.join(DEFAULT_DATA_DIR, "captures.db"))
 
-STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")  # "persistent" or other (temp)
-PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", "/app/data/captures")
+STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")  # persistent or temp
+PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", os.path.join(DEFAULT_DATA_DIR, "captures"))
 AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))
 
+# Ensure dirs exist
+os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+os.makedirs(PERSISTENT_STORAGE_PATH, exist_ok=True)
+os.makedirs(os.environ["PLAYWRIGHT_BROWSERS_PATH"], exist_ok=True)
+
+# Oregon Camping World locations (alphabetical)
 CW_LOCATIONS = {
     "bend": {"name": "Bend", "zip": "97701", "lat": 44.0582, "lon": -121.3153},
     "eugene": {"name": "Eugene", "zip": "97402", "lat": 44.0521, "lon": -123.0868},
@@ -29,6 +41,7 @@ CW_LOCATIONS = {
     "portland": {"name": "Portland", "zip": "97201", "lat": 45.5152, "lon": -122.6784},
 }
 
+# TSA list
 TSA_URLS = [
     "http://timestamp.digicert.com",
     "http://timestamp.sectigo.com",
@@ -676,7 +689,7 @@ def find_and_trigger_tooltip(page, label_text, tooltip_name):
 
     except Exception as e:
         debug.append(f"❌ Critical Error: {str(e)}")
-        traceback.print_exc())
+        traceback.print_exc()
         return False, "\n".join(debug)
 
 # -------------------- Capture Core --------------------
@@ -717,7 +730,11 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
-                    "--disable-blink-features=AutomationControlled"
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-gpu",
+                    "--no-zygote",
+                    "--single-process",
+                    "--js-flags=--max-old-space-size=128",
                 ],
             )
             context = browser.new_context(
@@ -862,6 +879,65 @@ def serve_shot(sid):
     if not path or not os.path.exists(path):
         return Response("Screenshot not found", status=404)
     return send_file(path, mimetype="image/png")
+
+# Health/diagnostics (Railway)
+@app.get("/healthz")
+def healthz():
+    try:
+        test_dir = os.path.join(PERSISTENT_STORAGE_PATH, "_health")
+        os.makedirs(test_dir, exist_ok=True)
+        with open(os.path.join(test_dir, "touch.txt"), "w") as f:
+            f.write(str(time.time()))
+        with get_db() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS _healthcheck (ts TEXT)")
+            conn.execute("INSERT INTO _healthcheck (ts) VALUES (?)", (datetime.datetime.utcnow().isoformat()+"Z",))
+        return jsonify({
+            "ok": True,
+            "db_path": DB_PATH,
+            "storage_path": PERSISTENT_STORAGE_PATH,
+            "browsers_path": os.environ.get("PLAYWRIGHT_BROWSERS_PATH"),
+        }), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.get("/admin/diag")
+@require_admin_auth
+def admin_diag():
+    out = {"env": {}, "fs": {}, "db_ok": False, "playwright_ok": False, "notes": []}
+    try:
+        out["env"] = {
+            "PORT": os.getenv("PORT"),
+            "DB_PATH": DB_PATH,
+            "PERSISTENT_STORAGE_PATH": PERSISTENT_STORAGE_PATH,
+            "PLAYWRIGHT_BROWSERS_PATH": os.environ.get("PLAYWRIGHT_BROWSERS_PATH"),
+            "STORAGE_MODE": STORAGE_MODE,
+            "IS_RAILWAY": IS_RAILWAY,
+        }
+        test_dir = os.path.join(PERSISTENT_STORAGE_PATH, "_diag")
+        os.makedirs(test_dir, exist_ok=True)
+        fp = os.path.join(test_dir, "write.txt")
+        with open(fp, "w") as f: f.write("ok")
+        out["fs"]["write_ok"] = True
+
+        with get_db() as conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS _diag (k TEXT, v TEXT)")
+            conn.execute("INSERT INTO _diag (k, v) VALUES (?, ?)", ("ts", datetime.datetime.utcnow().isoformat()+"Z"))
+            out["db_ok"] = True
+
+        try:
+            with sync_playwright() as p:
+                b = p.chromium.launch(headless=True, args=[
+                    "--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage"
+                ])
+                b.close()
+            out["playwright_ok"] = True
+        except Exception as e:
+            out["notes"].append(f"playwright: {e}")
+
+        return jsonify(out), 200
+    except Exception as e:
+        out["error"] = str(e)
+        return jsonify(out), 500
 
 @app.get("/admin/cleanup")
 @require_admin_auth
