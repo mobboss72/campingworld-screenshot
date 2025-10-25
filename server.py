@@ -812,6 +812,15 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
 @app.get("/")
 def root():
     return send_from_directory(".", "index.html")
+    
+    # ✅ Add this right after root():
+@app.get("/cash-conversion.html")
+def cash_conversion_html():
+    return send_from_directory(".", "cash-conversion.html")
+
+@app.get("/cash-conversion")
+def cash_conversion_pretty():
+    return send_from_directory(".", "cash-conversion.html")
 
 @app.get("/screenshot/<sid>")
 def serve_shot(sid):
