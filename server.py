@@ -279,6 +279,7 @@ def generate_pdf(
     try:
         from reportlab.pdfgen import canvas as pdfcanvas
         from reportlab.lib.pagesizes import letter
+        from reportlab.lib.units import inch
 
         page_w, page_h = letter
         margin = 0.35 * inch
@@ -286,6 +287,8 @@ def generate_pdf(
         gap_img   = 0.15 * inch
         title_h   = 0.25 * inch
         meta_line_h = 0.16 * inch
+
+        # Allow runtime debug boxes via env or query param (set ?debug=1 before calling this)
         debug_boxes = os.getenv("PDF_DEBUG_BOXES", "0") == "1"
 
         price_ok = bool(price_path and os.path.exists(price_path))
@@ -302,6 +305,7 @@ def generate_pdf(
             imgs.append(("Payment Disclosure", pay_path, im2))
             dims.append((im2.width, im2.height))
 
+        # Output path
         if price_ok:
             tmpdir = os.path.dirname(price_path)
         elif pay_ok:
@@ -347,20 +351,20 @@ def generate_pdf(
 
         def measure_hash_height():
             h = 0
-            heading_h = 0.16 * inch
-            h += heading_h
+            # Heading
+            h += 0.16 * inch
             max_text_width = page_w - 2 * margin
             if sha_price and sha_price != "N/A":
                 h += measure_wrapped_height(f"Price Disclosure: {sha_price}", max_text_width, font="Courier", size=7, leading=9)
             if sha_pay and sha_pay != "N/A":
                 h += measure_wrapped_height(f"Payment Disclosure: {sha_pay}", max_text_width, font="Courier", size=7, leading=9)
-            h += 0.04 * inch  # small buffer under hashes
+            h += 0.04 * inch
             return h
 
         def measure_rfc_height():
             h = 0
-            heading_h = 0.16 * inch
-            h += heading_h
+            # Heading
+            h += 0.16 * inch
             max_text_width = page_w - 2 * margin
 
             def block_height(label, data):
@@ -379,21 +383,18 @@ def generate_pdf(
                 total = 0
                 for ln in lines:
                     total += measure_wrapped_height(ln, max_text_width, font="Helvetica", size=8, leading=11)
-                return total + 2  # tiny spacer
+                return total + 2  # micro spacer
 
             h += block_height("Price", rfc_price)
             h += block_height("Payment", rfc_pay)
             return h
 
-        # Begin layout
+        # === Page header/meta ===
         y = page_h - margin
-
-        # Title
         c.setFont("Helvetica-Bold", 14)
         c.drawString(margin, y, "Camping World Compliance Capture Report")
         y -= title_h
 
-        # Metadata
         c.setFont("Helvetica", 8)
         max_text_width = page_w - 2 * margin
         meta_lines = [
@@ -412,13 +413,12 @@ def generate_pdf(
                 y -= meta_line_h
 
         y -= gap_small
-
         if is_used and not price_ok:
             c.setFont("Helvetica-Bold", 9)
             c.drawString(margin, y, "Used RV selected — no pricing breakdown needed.")
             y -= (gap_small + 0.05 * inch)
 
-        # ---- DYNAMIC FOOTER SPACE ----
+        # === Footer sizing ===
         hashes_h = measure_hash_height()
         rfc_h    = measure_rfc_height()
         footer_needed = hashes_h + rfc_h + 0.15 * inch  # safety buffer
@@ -427,38 +427,31 @@ def generate_pdf(
         available_for_imgs = max(0, (y - margin) - footer_needed)
 
         if debug_boxes:
-            # Draw reserved footer area guide
-            c.setStrokeGray(0.7)
-            c.setLineWidth(0.5)
-            c.rect(margin, margin, page_w - 2*margin, footer_needed, stroke=1, fill=0)
-            # Draw image area guide
+            # visual guides
+            c.setStrokeGray(0.7); c.setLineWidth(0.5)
+            c.rect(margin, margin, page_w - 2*margin, footer_needed, stroke=1, fill=0)  # footer area
             c.setStrokeGray(0.85)
-            c.rect(margin, margin + footer_needed, page_w - 2*margin, available_for_imgs, stroke=1, fill=0)
+            c.rect(margin, margin + footer_needed, page_w - 2*margin, available_for_imgs, stroke=1, fill=0)  # image area
 
-        # ---- IMAGES ----
+        # === Images ===
         if imgs and available_for_imgs > 0:
             max_img_w = page_w - 2 * margin
             scaled = []
-            # Pre-scale by width to fit the page
             for (label, path, im), (w, h) in zip(imgs, dims):
                 if w == 0 or h == 0:
-                    scaled.append((label, path, 0, 0))
-                    continue
+                    scaled.append((label, path, 0, 0)); continue
                 s = max_img_w / float(w)
                 scaled.append((label, path, w * s, h * s))
 
-            # Now scale down uniformly so total height fits available_for_imgs
             total_h = sum(h for _, _, _, h in scaled) + (len(scaled) - 1) * gap_img + len(scaled) * 0.13 * inch
             if total_h > available_for_imgs and total_h > 0:
                 shrink = available_for_imgs / total_h
                 scaled = [(label, path, w * shrink, h * shrink) for (label, path, w, h) in scaled]
 
-            # Draw images top-down within the image area
             y_top_images = margin + footer_needed + available_for_imgs
             y = y_top_images
             for idx, (label, path, dw, dh) in enumerate(scaled):
-                if dw <= 0 or dh <= 0:
-                    continue
+                if dw <= 0 or dh <= 0: continue
                 c.setFont("Helvetica", 8)
                 c.drawString(margin, y - 0.13 * inch, label)
                 y -= 0.13 * inch
@@ -467,18 +460,16 @@ def generate_pdf(
                 if idx < len(scaled) - 1:
                     y -= gap_img
         else:
-            # No images or no room; jump straight to footer area
-            y = margin + footer_needed + 0.02 * inch
-            c.setFont("Helvetica-Oblique", 9)
-            c.drawString(margin, y, "No screenshots available for this capture.")
-            y += 0.20 * inch
-            y = margin + footer_needed + available_for_imgs
+            # No screenshots; just leave the footer space
+            pass
 
-        # ---- FOOTER: SHA-256 ----
-        # Set y to the bottom content start (footer area begins at margin)
-        y = margin + footer_needed
-        # Draw SHA heading slightly above
-        y -= (rfc_h + 0.05 * inch)  # place SHA above RFC block
+        # === Footer (TOP/UPPER part): SHA-256 ===
+        footer_top = margin + footer_needed
+        sha_top = footer_top           # SHA lives at the *top* of the reserved footer area
+        rfc_top = margin + rfc_h       # RFC lives *above the margin*, height = rfc_h
+
+        # Draw SHA block from sha_top downward
+        y = sha_top
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "SHA-256 Verification")
         y -= 0.16 * inch
@@ -493,9 +484,11 @@ def generate_pdf(
             y = draw_hash("Price Disclosure", sha_price, y)
         if sha_pay and sha_pay != "N/A":
             y = draw_hash("Payment Disclosure", sha_pay, y)
+        # small pad above RFC area
+        # (no more subtractions here that would push us into the RFC section)
 
-        # ---- FOOTER: RFC-3161 ----
-        y -= 0.12 * inch
+        # === Footer (BOTTOM/lower part): RFC-3161 ===
+        y = rfc_top
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "RFC-3161 Timestamps")
         y -= 0.16 * inch
@@ -522,6 +515,7 @@ def generate_pdf(
 
         y = draw_rfc("Price", rfc_price, y)
         y = draw_rfc("Payment", rfc_pay, y)
+        # We should now be above or right at the margin line.
 
         c.showPage()
         c.save()
