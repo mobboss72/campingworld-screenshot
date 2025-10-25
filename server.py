@@ -288,6 +288,9 @@ def generate_pdf(
         title_h   = 0.25 * inch
         meta_line_h = 0.16 * inch
 
+
+        # Headings padding under them; images sit below (no overlap)
+        label_pad = 0.32 * inch
         # Allow runtime debug boxes via env or query param (set ?debug=1 before calling this)
         debug_boxes = os.getenv("PDF_DEBUG_BOXES", "0") == "1"
 
@@ -394,7 +397,7 @@ def generate_pdf(
 
         # === Footer sizing (SHA-256 only, no RFC) ===
         hashes_h = measure_hash_height()
-        footer_needed = hashes_h + 0.35 * inch  # Reduced from 0.5 to 0.35 to close gap with SHA section
+        footer_needed = hashes_h + 0.45 * inch  # Reduced from 0.5 to 0.35 to close gap with SHA section
 
         # Space left for images after guaranteeing the footer
         available_for_imgs = max(0, (y - margin) - footer_needed)
@@ -416,7 +419,7 @@ def generate_pdf(
                 s = max_img_w / float(w)
                 scaled.append((label, path, w * s, h * s))
 
-            total_h = sum(h for _, _, _, h in scaled) + (len(scaled) - 1) * gap_img + len(scaled) * 0.13 * inch
+            total_h = sum(h for _, _, _, h in scaled) + len(scaled) * label_pad + (len(scaled) - 1) * gap_img
             if total_h > available_for_imgs and total_h > 0:
                 shrink = available_for_imgs / total_h
                 scaled = [(label, path, w * shrink, h * shrink) for (label, path, w, h) in scaled]
@@ -426,9 +429,9 @@ def generate_pdf(
             for idx, (label, path, dw, dh) in enumerate(scaled):
                 if dw <= 0 or dh <= 0: continue
                 c.setFont("Helvetica", 8)
-                c.drawString(margin, y - 0.20 * inch, label)  # Increased from 0.13 to 0.20 for more padding
-                y -= 0.15 * inch  # Image starts higher, allowing partial overlap of label
-                c.drawImage(path, margin, y - dh, width=dw, height=dh, preserveAspectRatio=True, mask='auto')
+                c.drawString(margin, y, label)
+                y -= label_pad
+                c.drawImage(path, margin, y - dh, width=dw, height=dh, preserveAspectRatio=True, mask="auto")
                 y -= dh
                 if idx < len(scaled) - 1:
                     y -= gap_img
@@ -438,7 +441,7 @@ def generate_pdf(
 
         # === Footer: SHA-256 only (no RFC) ===
         # Position SHA section at bottom with proper spacing
-        sha_section_bottom = margin + 0.2 * inch  # Reduced from 0.35 to 0.2 to close gap
+        sha_section_bottom = margin + 0.30 * inch  # Reduced from 0.35 to 0.2 to close gap
         sha_section_top = sha_section_bottom + hashes_h
         
         # Draw SHA section
