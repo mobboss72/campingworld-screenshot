@@ -39,11 +39,12 @@ CW_LOCATIONS = {
 }
 
 # RFC 3161 Timestamp Authority URLs
+# Prefer stable, public TSAs
 TSA_URLS = [
     "http://timestamp.digicert.com",
-    "http://timestamp.apple.com/ts01",
-    "http://tsa.starfieldtech.com",
+    "http://timestamp.sectigo.com",
     "http://rfc3161timestamp.globalsign.com/advanced",
+    "http://tsa.swisssign.net",
 ]
 
 screenshot_cache = {}
@@ -1199,23 +1200,39 @@ def get_rfc3161_timestamp(file_path):
     with open(file_path, "rb") as f:
         file_bytes = f.read()
 
-    # Precompute SHA-256 in case we need hash-only fallback
+    # Precompute SHA-256 for hash-only fallback
     digest = hashlib.sha256(file_bytes).digest()
 
-    from rfc3161ng import RemoteTimestamper, decode_timestamp_response
+    try:
+        from rfc3161ng import RemoteTimestamper, decode_timestamp_response
+    except Exception as e:
+        print(f"✗ rfc3161ng not available: {e}")
+        return None
 
     for tsa_url in TSA_URLS:
         try:
             print(f"  Trying TSA: {tsa_url}")
             rt = RemoteTimestamper(tsa_url, hashname="sha256")
 
-            # Prefer sending the actual file bytes
+            tsr = None
+            # 1) Try sending file bytes (with certreq if supported)
             try:
-                tsr = rt.timestamp(data=file_bytes)
+                try:
+                    tsr = rt.timestamp(data=file_bytes, certreq=True)   # newer rfc3161ng
+                except TypeError:
+                    tsr = rt.timestamp(data=file_bytes)                 # older rfc3161ng
             except Exception as inner_e:
                 print(f"    data= failed ({inner_e}); retrying with data_hash...")
-                # Fallback: provide the SHA-256 digest explicitly
-                tsr = rt.timestamp(data_hash=digest)
+
+            # 2) Fallback: pass the digest explicitly
+            if not tsr:
+                try:
+                    try:
+                        tsr = rt.timestamp(data_hash=digest, certreq=True)
+                    except TypeError:
+                        tsr = rt.timestamp(data_hash=digest)
+                except Exception as inner2_e:
+                    print(f"    data_hash= failed ({inner2_e})")
 
             if not tsr:
                 print("    ✗ TSA returned no token")
