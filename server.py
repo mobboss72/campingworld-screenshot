@@ -495,7 +495,7 @@ def generate_pdf(
         c.setFont("Helvetica", 8)
 
         def draw_rfc(label, data, y):
-            if not data:
+            if not data or not data.get('timestamp') or data.get('timestamp') == 'N/A':
                 c.drawString(margin, y, f"{label}: N/A")
                 return y - 0.14 * inch
             lines = [
@@ -1544,8 +1544,8 @@ def view_capture(capture_id):
     price_path = price_path if (price_path and os.path.exists(price_path)) else None
     pay_path   = pay_path   if (pay_path and os.path.exists(pay_path))   else None
 
-    rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None} if capture['price_tsa'] else None
-    rfc_pay   = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None} if capture['payment_tsa'] else None
+    rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None} if (capture['price_tsa'] and capture['price_timestamp']) else None
+    rfc_pay   = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None} if (capture['payment_tsa'] and capture['payment_timestamp']) else None
 
     # --- AUTO-STAMP SAFETY NET: If missing OR explicitly requested via restamp, stamp now (when file exists) ---
     updated = {}
