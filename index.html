@@ -135,17 +135,21 @@
     /* Feature Cards */
     .features {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 20px;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
       margin-bottom: 60px;
+      max-width: 900px;
+      margin-left: auto;
+      margin-right: auto;
     }
 
     .feature-card {
       background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 18px;
-      padding: 32px 28px;
+      border-radius: 14px;
+      padding: 20px 16px;
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      text-align: center;
     }
 
     .feature-card:hover {
@@ -155,28 +159,28 @@
     }
 
     .feature-icon {
-      width: 48px;
-      height: 48px;
+      width: 40px;
+      height: 40px;
       background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
-      border-radius: 12px;
+      border-radius: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 24px;
-      margin-bottom: 20px;
+      font-size: 20px;
+      margin: 0 auto 12px;
     }
 
     .feature-card h3 {
-      font-size: 20px;
+      font-size: 16px;
       font-weight: 600;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
       letter-spacing: -0.01em;
     }
 
     .feature-card p {
-      font-size: 15px;
+      font-size: 13px;
       color: var(--text-secondary);
-      line-height: 1.5;
+      line-height: 1.4;
     }
 
     /* Capture Form */
@@ -207,6 +211,17 @@
       display: flex;
       flex-direction: column;
       gap: 24px;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .button-group button,
+    .button-group .history-link {
+      flex: 1;
     }
 
     .form-group {
@@ -312,30 +327,30 @@
     }
 
     /* History Link */
-    .history-section {
-      text-align: center;
-      margin-bottom: 60px;
-    }
-
     .history-link {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
-      padding: 14px 28px;
-      background: var(--bg-card);
+      padding: 16px 32px;
+      background: var(--bg-primary);
       border: 1px solid var(--border);
       border-radius: 12px;
       color: var(--text-primary);
       text-decoration: none;
-      font-size: 15px;
+      font-size: 17px;
       font-weight: 500;
       transition: all 0.2s ease;
+      font-family: inherit;
+      letter-spacing: -0.01em;
+      cursor: pointer;
     }
 
     .history-link:hover {
-      transform: translateY(-2px);
+      transform: translateY(-1px);
       box-shadow: var(--shadow-md);
       border-color: var(--accent);
+      background: var(--bg-card);
     }
 
     /* How It Works */
@@ -413,6 +428,13 @@
     }
 
     /* Responsive Design */
+    @media (max-width: 980px) {
+      .features {
+        grid-template-columns: repeat(2, 1fr);
+        max-width: 600px;
+      }
+    }
+
     @media (max-width: 768px) {
       h1 {
         font-size: 40px;
@@ -438,6 +460,15 @@
 
       .section-description {
         font-size: 16px;
+      }
+
+      .button-group {
+        flex-direction: column;
+      }
+
+      .button-group button,
+      .button-group .history-link {
+        width: 100%;
       }
 
       .features {
@@ -656,7 +687,13 @@
             <input type="text" name="stock" id="stock" placeholder="2607628P" required pattern="[a-zA-Z0-9]+" title="Please enter a stock number (e.g., 2607628P)">
           </div>
           
-          <button type="submit" id="submitBtn">Run Capture</button>
+          <div class="button-group">
+            <button type="submit" id="submitBtn">Run Capture</button>
+            <a href="/history" class="history-link">
+              <span>📋</span>
+              View History
+            </a>
+          </div>
         </form>
 
         <div class="loading" id="loading">
@@ -689,13 +726,6 @@
           <h3>All Unit Types</h3>
           <p>Works seamlessly with New, Used, and Consignment RVs. Captures pricing details regardless of inventory status.</p>
         </div>
-      </div>
-
-      <div class="history-section">
-        <a href="/history" class="history-link">
-          <span>📋</span>
-          View Capture History
-        </a>
       </div>
 
       <div class="how-it-works" id="how-it-works">
