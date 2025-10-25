@@ -809,8 +809,8 @@ def generate_pdf(
 
 
         # PDF output path
-pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
-c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
+        pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
+        c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
 
         # Helpers
         def draw_wrapped_line(text, x, y, max_width, font="Helvetica", size=8, leading=11):
