@@ -215,7 +215,8 @@ def get_rfc3161_timestamp(file_path):
     try:
         from rfc3161ng import RemoteTimestamper, decode_timestamp_response
     except Exception as e:
-        print(f"✗ rfc3161ng not available: {e}")
+        print(f"❌ CRITICAL: rfc3161ng library not available: {e}")
+        print(f"   Install with: pip install rfc3161ng --break-system-packages")
         return None
 
     for tsa_url in TSA_URLS:
@@ -463,12 +464,19 @@ def generate_pdf(
             # No screenshots; just leave the footer space
             pass
 
-        # === Footer (TOP/UPPER part): SHA-256 ===
-        footer_top = margin + footer_needed
-        sha_top = footer_top           # SHA lives at the *top* of the reserved footer area
-        rfc_top = margin + rfc_h       # RFC lives *above the margin*, height = rfc_h
+        # === Footer layout (from bottom up): RFC at bottom, then SHA above it ===
+        # RFC section starts at the page margin (bottom)
+        rfc_bottom = margin
+        rfc_top = rfc_bottom + rfc_h
+        
+        # SHA section starts above RFC section
+        sha_bottom = rfc_top
+        sha_top = sha_bottom + hashes_h
+        
+        # Total footer ends at sha_top
+        footer_top = sha_top
 
-        # Draw SHA block from sha_top downward
+        # Draw SHA block (draws downward from sha_top)
         y = sha_top
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "SHA-256 Verification")
@@ -484,10 +492,8 @@ def generate_pdf(
             y = draw_hash("Price Disclosure", sha_price, y)
         if sha_pay and sha_pay != "N/A":
             y = draw_hash("Payment Disclosure", sha_pay, y)
-        # small pad above RFC area
-        # (no more subtractions here that would push us into the RFC section)
 
-        # === Footer (BOTTOM/lower part): RFC-3161 ===
+        # === Footer (BOTTOM part): RFC-3161 ===
         y = rfc_top
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "RFC-3161 Timestamps")
@@ -1638,13 +1644,27 @@ def capture():
         rfc_price = None
         rfc_pay = None
         try:
-            rfc_price = get_rfc3161_timestamp(price_path) if price_ok else None
+            if price_ok:
+                print(f"🕐 Attempting to get RFC-3161 timestamp for price screenshot...")
+                rfc_price = get_rfc3161_timestamp(price_path)
+                if rfc_price:
+                    print(f"✓ Price timestamp obtained: {rfc_price.get('timestamp')}")
+                else:
+                    print(f"✗ Price timestamp failed - all TSAs returned None")
         except Exception as e:
             print(f"⚠ RFC 3161 timestamp failed for price: {e}")
+            traceback.print_exc()
         try:
-            rfc_pay = get_rfc3161_timestamp(pay_path) if pay_ok else None
+            if pay_ok:
+                print(f"🕐 Attempting to get RFC-3161 timestamp for payment screenshot...")
+                rfc_pay = get_rfc3161_timestamp(pay_path)
+                if rfc_pay:
+                    print(f"✓ Payment timestamp obtained: {rfc_pay.get('timestamp')}")
+                else:
+                    print(f"✗ Payment timestamp failed - all TSAs returned None")
         except Exception as e:
             print(f"⚠ RFC 3161 timestamp failed for payment: {e}")
+            traceback.print_exc()
 
         if rfc_price:
             debug_info += f"\nRFC3161_PRICE_OK={rfc_price.get('timestamp')}"
