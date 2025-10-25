@@ -356,11 +356,11 @@ def generate_pdf(
             max_text_width = page_w - 2 * margin
             if sha_price and sha_price != "N/A":
                 h += measure_wrapped_height(f"Price Disclosure: {sha_price}", max_text_width, font="Courier", size=7, leading=9)
-                h += 0.08 * inch  # Extra padding after each hash
+                h += 0.12 * inch  # Extra padding after each hash (increased)
             if sha_pay and sha_pay != "N/A":
                 h += measure_wrapped_height(f"Payment Disclosure: {sha_pay}", max_text_width, font="Courier", size=7, leading=9)
-                h += 0.08 * inch  # Extra padding after each hash
-            h += 0.15 * inch  # Bottom padding
+                h += 0.12 * inch  # Extra padding after each hash (increased)
+            h += 0.2 * inch  # Bottom padding (increased)
             return h
 
         # === Page header/meta ===
@@ -394,7 +394,7 @@ def generate_pdf(
 
         # === Footer sizing (SHA-256 only, no RFC) ===
         hashes_h = measure_hash_height()
-        footer_needed = hashes_h + 0.25 * inch  # Extra padding between images and footer
+        footer_needed = hashes_h + 0.5 * inch  # Extra padding between images and footer (increased)
 
         # Space left for images after guaranteeing the footer
         available_for_imgs = max(0, (y - margin) - footer_needed)
@@ -438,7 +438,7 @@ def generate_pdf(
 
         # === Footer: SHA-256 only (no RFC) ===
         # Position SHA section at bottom with proper spacing
-        sha_section_bottom = margin + 0.25 * inch  # Start above bottom margin
+        sha_section_bottom = margin + 0.35 * inch  # Start above bottom margin (increased spacing)
         sha_section_top = sha_section_bottom + hashes_h
         
         # Draw SHA section
@@ -452,7 +452,7 @@ def generate_pdf(
             txt = f"{label}: {value or 'N/A'}"
             used_h = draw_wrapped_line(txt, margin, y, max_text_width, font="Courier", size=7, leading=9)
             y -= used_h
-            y -= 0.08 * inch  # Add padding after each hash
+            y -= 0.12 * inch  # Add padding after each hash (increased)
             return y
 
         if sha_price and sha_price != "N/A":
