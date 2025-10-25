@@ -1188,49 +1188,61 @@ def https_date():
         return None
 
 def get_rfc3161_timestamp(file_path):
-    """Get RFC 3161 timestamp for a file from a public TSA."""
+    """Request an RFC 3161 timestamp token for a file.
+       Tries multiple TSAs. Returns dict with timestamp, tsa, and token path, or None."""
     if not file_path or not os.path.exists(file_path):
         return None
-    
+
     print(f"🕐 Getting RFC 3161 timestamp for {os.path.basename(file_path)}...")
-    
-    file_hash = hashlib.sha256()
+
+    # Read full file bytes (preferred by most TSAs)
     with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(1024*1024), b""):
-            file_hash.update(chunk)
-    digest = file_hash.digest()
-    
+        file_bytes = f.read()
+
+    # Precompute SHA-256 in case we need hash-only fallback
+    digest = hashlib.sha256(file_bytes).digest()
+
+    from rfc3161ng import RemoteTimestamper, decode_timestamp_response
+
     for tsa_url in TSA_URLS:
         try:
             print(f"  Trying TSA: {tsa_url}")
-            rt = RemoteTimestamper(tsa_url, hashname='sha256')
-            tsr = rt.timestamp(data=digest)
-            
-            if tsr:
-                from rfc3161ng import decode_timestamp_response
-                ts_info = decode_timestamp_response(tsr)
-                timestamp_dt = ts_info.gen_time
-                timestamp_str = timestamp_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
-                
-                token_path = file_path + ".tsr"
-                with open(token_path, "wb") as tf:
-                    tf.write(tsr)
-                
-                print(f"  ✓ Timestamp obtained: {timestamp_str}")
-                
-                return {
-                    "timestamp": timestamp_str,
-                    "tsa": tsa_url,
-                    "cert_info": f"Token saved: {os.path.basename(token_path)}",
-                    "token_file": token_path
-                }
+            rt = RemoteTimestamper(tsa_url, hashname="sha256")
+
+            # Prefer sending the actual file bytes
+            try:
+                tsr = rt.timestamp(data=file_bytes)
+            except Exception as inner_e:
+                print(f"    data= failed ({inner_e}); retrying with data_hash...")
+                # Fallback: provide the SHA-256 digest explicitly
+                tsr = rt.timestamp(data_hash=digest)
+
+            if not tsr:
+                print("    ✗ TSA returned no token")
+                continue
+
+            ts_info = decode_timestamp_response(tsr)
+            ts_dt = getattr(ts_info, "gen_time", None)
+            ts_str = ts_dt.strftime("%Y-%m-%d %H:%M:%S UTC") if ts_dt else "Unknown Time"
+
+            token_path = file_path + ".tsr"
+            with open(token_path, "wb") as tf:
+                tf.write(tsr)
+
+            print(f"  ✓ Timestamp obtained from {tsa_url}: {ts_str}")
+            return {
+                "timestamp": ts_str,
+                "tsa": tsa_url,
+                "cert_info": f"Token saved: {os.path.basename(token_path)}",
+                "token_file": token_path,
+            }
+
         except Exception as e:
             print(f"  ✗ TSA {tsa_url} failed: {e}")
             continue
-    
+
     print(f"  ✗ All TSAs failed for {os.path.basename(file_path)}")
     return None
-
 def find_and_trigger_tooltip(page, label_text, tooltip_name):
     """Enhanced tooltip triggering with multiple fallback strategies."""
     debug = []
