@@ -1681,30 +1681,41 @@ a{{color:#2563eb}}</style>
         print("❌ /capture failed:", e, file=sys.stderr)
         traceback.print_exc()
         return Response(f"Error: {e}", status=500)
-from flask import send_file
-from PIL import Image
-from PyPDF2 import PdfMerger, PdfReader
-from playwright.sync_api import sync_playwright
-import io
 import os
+import io
 import tempfile
+from flask import Flask, request, send_file, jsonify
+from playwright.sync_api import sync_playwright
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from PyPDF2 import PdfMerger
+from PIL import Image
 
-def capture_sign_as_pdf(stock_number):
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
-        url = f"https://rv-sign-builder-862473457030.us-central1.run.app/?stockNumber={stock_number}"
-        page.goto(url)
-        page.wait_for_selector('div.rv-sign-container.relative.w-full.max-w-5xl.p-5.b.')
-        element = page.locator('div.rv-sign-container.relative.w-full.max-w-5xl.p-5.b.')
-        screenshot_bytes = element.screenshot(type="png")
-        browser.close()
-    img = Image.open(io.BytesIO(screenshot_bytes)).convert("RGB")
-    
-    # Save screenshot as a real PDF file (not just bytes)
-    temp_img_pdf_path = tempfile.mktemp(suffix=".pdf")
-    img.save(temp_img_pdf_path, "PDF")
-    return temp_img_pdf_path
+app = Flask(__name__)
+
+def image_to_pdf_page(image_bytes):
+    img = Image.open(io.BytesIO(image_bytes))
+    pdf_path = tempfile.mktemp(suffix=".pdf")
+    c = canvas.Canvas(pdf_path, pagesize=letter)
+    iw, ih = img.size
+    pw, ph = letter
+    aspect = iw / ih
+    # Scale and center image
+    if iw > pw or ih > ph:
+        if pw / ph > aspect:
+            nh = ph
+            nw = nh * aspect
+        else:
+            nw = pw
+            nh = nw / aspect
+    else:
+        nw, nh = iw, ih
+    x = (pw - nw) / 2
+    y = (ph - nh) / 2
+    c.drawImage(io.BytesIO(image_bytes), x, y, width=nw, height=nh)
+    c.showPage()
+    c.save()
+    return pdf_path
 
 @app.route("/capture_merged_pdf", methods=["POST", "GET"])
 def capture_and_merge():
@@ -1714,18 +1725,34 @@ def capture_and_merge():
     if not stock_number or not os.path.exists(existing_pdf_path):
         return jsonify({"error": "stockNumber and inputPdf file required"}), 400
 
-    # Capture screenshot as a real PDF file
-    sign_pdf_path = capture_sign_as_pdf(stock_number)
+    # Playwright screenshot logic
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        url = f"https://rv-sign-builder-862473457030.us-central1.run.app/?stockNumber={stock_number}"
+        page.goto(url)
+        page.wait_for_selector('div.rv-sign-container.relative.w-full.max-w-5xl.p-5.b.')
+        element = page.locator('div.rv-sign-container.relative.w-full.max-w-5xl.p-5.b.')
+        screenshot_bytes = element.screenshot(type="png")
+        browser.close()
 
-    # Merge: Always produces two pages, never overlays
+    # Create single-page reportlab PDF from image
+    sign_pdf_path = image_to_pdf_page(screenshot_bytes)
+
+    # Merge as second page
     merger = PdfMerger()
     merger.append(existing_pdf_path)
     merger.append(sign_pdf_path)
     merger.write(output_pdf_path)
     merger.close()
-    os.remove(sign_pdf_path)  # Clean up temp file
+    os.remove(sign_pdf_path)
 
     return send_file(output_pdf_path, mimetype="application/pdf", as_attachment=True, download_name=os.path.basename(output_pdf_path))
+
+# -------------------- Entrypoint --------------------
+if __name__ == "__main__":
+    PORT = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=PORT, debug=False)
 
 # -------------------- Entrypoint --------------------
 
