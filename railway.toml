@@ -1,10 +1,11 @@
 [build]
 builder = "dockerfile"
-
+builder = "NIXPACKS"
 [deploy]
 startCommand = "gunicorn --bind 0.0.0.0:8080 --timeout 120 --workers 2 server:app"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
+startCommand = "npm start"
 
 # Volume for persistent storage of database and screenshots
 # Note: You'll need to create this volume in Railway dashboard
