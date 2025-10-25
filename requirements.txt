@@ -5,3 +5,4 @@ pillow==10.4.0
 requests==2.32.3
 reportlab==4.2.5
 rfc3161ng==2.1.2
+PyPDF2==3.0.1
