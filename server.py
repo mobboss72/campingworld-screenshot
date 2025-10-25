@@ -2062,17 +2062,15 @@ def view_capture(capture_id):
             as_attachment=True,
             download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf"
         )
-        <td>
-      <a href="/view/{{capture.id}}?force=1" class="view-btn">Force PDF</a>
-      &nbsp;|&nbsp;
-      <a href="/view/{{capture.id}}?force=1&restamp=1" class="view-btn">Re-stamp + PDF</a>
-      &nbsp;|&nbsp;
-      <a href="https://rv-sign-builder-862473457030.us-central1.run.app/?stockNumber={{capture.stock}}" 
+  <td>
+  <a href="/view/{{capture.id}}?force=1" class="view-btn">Force PDF</a>
+  &nbsp;|&nbsp;
+  <a href="/view/{{capture.id}}?force=1&restamp=1" class="view-btn">Re-stamp + PDF</a>
+  &nbsp;|&nbsp;
+  <a href="https://rv-sign-builder-862473457030.us-central1.run.app/?stockNumber={{capture.stock}}" 
      class="view-btn" target="_blank">Print Sign</a>
-        </td>
-
-
-    # Rebuild (optionally re-stamp)
+</td>
+# Rebuild (optionally re-stamp)
     price_path = capture['price_screenshot_path']
     pay_path   = capture['payment_screenshot_path']
     price_path = price_path if (price_path and os.path.exists(price_path)) else None
