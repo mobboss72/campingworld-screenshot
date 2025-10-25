@@ -373,6 +373,31 @@ def admin_dashboard():
         usage_percent = (total_size_mb / estimated_max_mb * 100) if estimated_max_mb > 0 else 0
         
         html = render_template_string("""
+@app.get("/admin/tsa-diagnostics")
+@require_admin_auth
+def tsa_diagnostics():
+    results = []
+    try:
+        from rfc3161ng import RemoteTimestamper
+        for url in TSA_URLS:
+            item = {"tsa": url, "ok": False, "notes": ""}
+            try:
+                rt = RemoteTimestamper(url, hashname="sha256")
+                # Ask for a tiny token just to validate the path works
+                tsr = None
+                try:
+                    tsr = rt.timestamp(data=b"diag", certreq=True)
+                except TypeError:
+                    tsr = rt.timestamp(data=b"diag")
+                item["ok"] = bool(tsr)
+                item["notes"] = "token received" if tsr else "no token"
+            except Exception as e:
+                item["ok"] = False
+                item["notes"] = str(e)[:200]
+            results.append(item)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"results": results})
 <!doctype html>
 <html>
 <head>
