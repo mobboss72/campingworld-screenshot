@@ -947,99 +947,225 @@ a{{color:#2563eb}}</style>
 
 # -------------------- Helpers --------------------
 
-def generate_pdf(stock, location, zip_code, url, utc_time, https_date, 
-                 price_path, pay_path, sha_price, sha_pay, 
-                 rfc_price, rfc_pay, debug_info):
-    """Generate PDF report with screenshots stacked on one page"""
+def generate_pdf(
+    stock, location, zip_code, url, utc_time, https_date,
+    price_path, pay_path, sha_price, sha_pay,
+    rfc_price, rfc_pay, debug_info
+):
+    """
+    Generate a single-page LETTER PDF.
+    - Title + metadata at the top (compact)
+    - 1 or 2 screenshots scaled to fit the remaining page height (stacked)
+    - SHA256 + RFC3161 info at the bottom
+    - If used RV (inferred from debug_info) and price is absent: show the 'Used RV selected...' note
+    """
     try:
-        if price_path:
+        from reportlab.pdfgen import canvas as pdfcanvas
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.units import inch
+        from PIL import Image as PILImage
+        import os
+
+        # ---- Page + layout constants ----
+        page_w, page_h = letter
+        margin = 0.35 * inch
+        gap_small = 0.10 * inch     # small vertical gap
+        gap_img   = 0.15 * inch     # gap between stacked screenshots
+        title_h   = 0.25 * inch     # approximate title block height
+        meta_lines = 5              # Stock, Location/ZIP, URL, Capture UTC, HTTPS Date
+        meta_line_h = 0.16 * inch
+        meta_block_h = meta_lines * meta_line_h + gap_small
+
+        footer_min = 0.90 * inch    # reserved footer area for hashes / RFC info
+
+        # ---- Resolve paths & detect presence ----
+        price_ok = bool(price_path and os.path.exists(price_path))
+        pay_ok   = bool(pay_path and os.path.exists(pay_path))
+
+        # ---- Used unit note (inferred) ----
+        is_used = False
+        try:
+            if debug_info and "Unit type: Used" in debug_info:
+                is_used = True
+        except:
+            pass
+
+        # ---- Open images (lazy) ----
+        imgs = []
+        dims = []
+        labels = []
+        if price_ok:
+            im1 = PILImage.open(price_path)
+            imgs.append(("Price Disclosure", price_path, im1))
+            dims.append((im1.width, im1.height))
+            labels.append("Price Disclosure")
+        if pay_ok:
+            im2 = PILImage.open(pay_path)
+            imgs.append(("Payment Disclosure", pay_path, im2))
+            dims.append((im2.width, im2.height))
+            labels.append("Payment Disclosure")
+
+        # ---- Output path ----
+        # Prefer the temp/persistent directory of whichever image exists, else create a temp dir
+        if price_ok:
             tmpdir = os.path.dirname(price_path)
-        elif pay_path:
+        elif pay_ok:
             tmpdir = os.path.dirname(pay_path)
         else:
             tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
 
         pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
-        print(f"📄 Generating PDF at: {pdf_path}")
+        c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
 
-        # Load images and compute dimensions
-        from PIL import Image as PILImage
-        img1 = PILImage.open(price_path) if price_path and os.path.exists(price_path) else None
-        img2 = PILImage.open(pay_path) if pay_path and os.path.exists(pay_path) else None
+        y = page_h - margin
 
-        h1 = img1.height if img1 else 0
-        h2 = img2.height if img2 else 0
-        w1 = img1.width if img1 else 0
-        w2 = img2.width if img2 else 0
+        # ---- Title ----
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(margin, y, "Camping World Compliance Capture Report")
+        y -= title_h
 
-        max_width = max(w1, w2)
-        total_height = h1 + h2
-
-        pdf_width = max_width * 0.75 + inch  # add 0.5 inch margins on both sides
-        pdf_height = total_height * 0.75 + inch
-
-        doc = SimpleDocTemplate(pdf_path, pagesize=(pdf_width, pdf_height),
-                               leftMargin=0.5*inch, rightMargin=0.5*inch,
-                               topMargin=0.5*inch, bottomMargin=0.5*inch)
-
-        story = []
-        styles = getSampleStyleSheet()
-
-        story.append(Paragraph("Camping World Compliance Capture Report", styles['Heading1']))
-        story.append(Spacer(1, 0.25 * inch))
-
-        meta_data = [
-            ['Stock Number:', stock],
-            ['Location:', f"{location} (ZIP: {zip_code})"],
-            ['URL:', url],
-            ['Capture Time (UTC):', utc_time],
-            ['HTTPS Date:', https_date or 'N/A'],
+        # ---- Metadata ----
+        c.setFont("Helvetica", 8)
+        meta_lines_list = [
+            f"Stock: {stock}",
+            f"Location: {location} (ZIP: {zip_code})",
+            f"URL: {url or 'N/A'}",
+            f"Capture Time (UTC): {utc_time}",
+            f"HTTPS Date: {https_date or 'N/A'}",
         ]
 
-        meta_table = Table(meta_data, colWidths=[2 * inch, 5 * inch])
-        meta_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f3f4f6')),
-            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 9),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ]))
-        story.append(meta_table)
-        story.append(Spacer(1, 0.2 * inch))
+        def draw_wrapped_line(text, x, y, max_width, font="Helvetica", size=8, leading=11):
+            """Simple word-wrap for a single logical line."""
+            c.setFont(font, size)
+            words = (text or "").split()
+            line = ""
+            used_y = 0
+            for w in words:
+                test = w if not line else (line + " " + w)
+                if c.stringWidth(test, font, size) <= max_width:
+                    line = test
+                else:
+                    c.drawString(x, y - used_y, line)
+                    used_y += leading
+                    line = w
+            if line:
+                c.drawString(x, y - used_y, line)
+                used_y += leading
+            return used_y
 
-        story.append(Paragraph("Captured Disclosures", styles['Heading2']))
-        story.append(Spacer(1, 0.1 * inch))
+        # URL can be long; wrap that one specifically
+        max_text_width = page_w - 2 * margin
+        for idx, line in enumerate(meta_lines_list):
+            if line.startswith("URL: "):
+                used_h = draw_wrapped_line(line, margin, y, max_text_width, size=8, leading=11)
+                y -= used_h
+            else:
+                c.drawString(margin, y, line)
+                y -= meta_line_h
 
-        if img1:
-            story.append(Paragraph("Price Disclosure", styles['Normal']))
-            story.append(Image(price_path, width=w1 * 0.75, height=h1 * 0.75))
-            story.append(Spacer(1, 0.2 * inch))
+        y -= gap_small
 
-        if img2:
-            story.append(Paragraph("Payment Disclosure", styles['Normal']))
-            story.append(Image(pay_path, width=w2 * 0.75, height=h2 * 0.75))
-            story.append(Spacer(1, 0.2 * inch))
+        # ---- "Used RV" banner if applicable ----
+        if is_used and not price_ok:
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(margin, y, "Used RV selected — no pricing breakdown needed.")
+            y -= (gap_small + 0.05 * inch)
 
-        story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
-        hash_data = []
-        if sha_price != "N/A":
-            hash_data.append(['Price Disclosure:', sha_price])
-        if sha_pay != "N/A":
-            hash_data.append(['Payment Disclosure:', sha_pay])
+        # ---- Compute available height for screenshots ----
+        # Reserve footer area for hashes + RFC info
+        available_for_imgs = max(0, y - margin - footer_min)
 
-        hash_table = Table(hash_data, colWidths=[2 * inch, 5 * inch])
-        hash_table.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTNAME', (1, 0), (1, -1), 'Courier'),
-            ('FONTSIZE', (0, 0), (-1, -1), 7),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ]))
-        story.append(hash_table)
+        # ---- Draw screenshots scaled to fit in available area (stacked) ----
+        if imgs:
+            # First, scale by width (fit to content width)
+            max_img_w = page_w - 2 * margin
+            scaled = []
+            for (label, path, im), (w, h) in zip(imgs, dims):
+                if w == 0 or h == 0:
+                    scaled.append((label, path, 0, 0))
+                    continue
+                s = max_img_w / float(w)
+                scaled.append((label, path, w * s, h * s))
 
-        doc.build(story)
-        print(f"✓ PDF generated successfully: {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
+            # Total stacked height with gaps
+            total_h = sum(h for _, _, _, h in scaled) + (len(scaled) - 1) * gap_img
+
+            # If too tall, shrink everything proportionally to fit
+            if total_h > available_for_imgs and total_h > 0:
+                shrink = available_for_imgs / total_h
+                scaled = [(label, path, w * shrink, h * shrink) for (label, path, w, h) in scaled]
+
+            # Draw from current y downwards
+            for idx, (label, path, dw, dh) in enumerate(scaled):
+                if dw <= 0 or dh <= 0:
+                    continue
+                # label
+                c.setFont("Helvetica", 8)
+                c.drawString(margin, y, label)
+                y -= 0.13 * inch
+                # image
+                # Keep left aligned; could be centered if desired
+                c.drawImage(path, margin, y - dh, width=dw, height=dh, preserveAspectRatio=True, mask='auto')
+                y -= dh
+                if idx < len(scaled) - 1:
+                    y -= gap_img
+        else:
+            # No screenshots captured at all
+            c.setFont("Helvetica-Oblique", 9)
+            c.drawString(margin, y, "No screenshots available for this capture.")
+            y -= 0.25 * inch
+
+        # ---- Footer: SHA-256 ----
+        y -= 0.20 * inch
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(margin, y, "SHA-256 Verification")
+        y -= 0.16 * inch
+        c.setFont("Courier", 7)
+
+        def draw_hash(label, value, y):
+            txt = f"{label}: {value or 'N/A'}"
+            used_h = draw_wrapped_line(txt, margin, y, max_text_width, font="Courier", size=7, leading=9)
+            return y - used_h
+
+        if sha_price and sha_price != "N/A":
+            y = draw_hash("Price Disclosure", sha_price, y)
+        if sha_pay and sha_pay != "N/A":
+            y = draw_hash("Payment Disclosure", sha_pay, y)
+
+        # ---- Footer: RFC 3161 ----
+        y -= 0.15 * inch
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(margin, y, "RFC-3161 Timestamps")
+        y -= 0.16 * inch
+        c.setFont("Helvetica", 8)
+
+        def draw_rfc(label, data, y):
+            if not data:
+                c.drawString(margin, y, f"{label}: N/A")
+                return y - 0.14 * inch
+            # timestamp, tsa, token_file/cert_info
+            lines = [
+                f"{label}:",
+                f"  Timestamp: {data.get('timestamp', 'N/A')}",
+                f"  TSA: {data.get('tsa', 'N/A')}",
+            ]
+            token = data.get("token_file")
+            if token:
+                lines.append(f"  Token: {os.path.basename(token)}")
+            elif data.get("cert_info"):
+                lines.append(f"  Info: {data['cert_info']}")
+            used = 0
+            for ln in lines:
+                used += draw_wrapped_line(ln, margin, y - used, max_text_width, font="Helvetica", size=8, leading=11)
+            return y - used - 2  # small nudge
+
+        y = draw_rfc("Price", rfc_price, y)
+        y = draw_rfc("Payment", rfc_pay, y)
+
+        # ---- Finalize ----
+        c.showPage()          # single page by design
+        c.save()
+        print(f"✓ PDF generated (one page): {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
         return pdf_path
 
     except Exception as e:
