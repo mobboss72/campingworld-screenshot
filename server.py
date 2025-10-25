@@ -288,9 +288,6 @@ def generate_pdf(
         title_h   = 0.25 * inch
         meta_line_h = 0.16 * inch
 
-
-        # Headings padding under them; images sit below (no overlap)
-        label_pad = 0.32 * inch
         # Allow runtime debug boxes via env or query param (set ?debug=1 before calling this)
         debug_boxes = os.getenv("PDF_DEBUG_BOXES", "0") == "1"
 
@@ -354,16 +351,18 @@ def generate_pdf(
 
         def measure_hash_height():
             h = 0
+            # Top padding above heading
+            h += 0.1 * inch
             # Heading
-            h += 0.20 * inch
+            h += 0.16 * inch
             max_text_width = page_w - 2 * margin
             if sha_price and sha_price != "N/A":
                 h += measure_wrapped_height(f"Price Disclosure: {sha_price}", max_text_width, font="Courier", size=7, leading=9)
-                h += 0.12 * inch  # Extra padding after each hash (increased)
+                h += 0.12 * inch  # Extra padding after each hash
             if sha_pay and sha_pay != "N/A":
                 h += measure_wrapped_height(f"Payment Disclosure: {sha_pay}", max_text_width, font="Courier", size=7, leading=9)
-                h += 0.12 * inch  # Extra padding after each hash (increased)
-            h += 0.2 * inch  # Bottom padding (increased)
+                h += 0.12 * inch  # Extra padding after each hash
+            h += 0.15 * inch  # Bottom padding
             return h
 
         # === Page header/meta ===
@@ -397,7 +396,7 @@ def generate_pdf(
 
         # === Footer sizing (SHA-256 only, no RFC) ===
         hashes_h = measure_hash_height()
-        footer_needed = hashes_h + 0.45 * inch  # Reduced from 0.5 to 0.35 to close gap with SHA section
+        footer_needed = hashes_h + 0.4 * inch  # Increased from 0.35 to 0.4 for better clearance
 
         # Space left for images after guaranteeing the footer
         available_for_imgs = max(0, (y - margin) - footer_needed)
@@ -419,7 +418,7 @@ def generate_pdf(
                 s = max_img_w / float(w)
                 scaled.append((label, path, w * s, h * s))
 
-            total_h = sum(h for _, _, _, h in scaled) + len(scaled) * label_pad + (len(scaled) - 1) * gap_img
+            total_h = sum(h for _, _, _, h in scaled) + (len(scaled) - 1) * gap_img + len(scaled) * 0.13 * inch
             if total_h > available_for_imgs and total_h > 0:
                 shrink = available_for_imgs / total_h
                 scaled = [(label, path, w * shrink, h * shrink) for (label, path, w, h) in scaled]
@@ -429,9 +428,9 @@ def generate_pdf(
             for idx, (label, path, dw, dh) in enumerate(scaled):
                 if dw <= 0 or dh <= 0: continue
                 c.setFont("Helvetica", 8)
-                c.drawString(margin, y, label)
-                y -= label_pad
-                c.drawImage(path, margin, y - dh, width=dw, height=dh, preserveAspectRatio=True, mask="auto")
+                c.drawString(margin, y - 0.12 * inch, label)  # Label position
+                y -= 0.24 * inch  # Move down to clear the label completely (0.12" for label + 0.12" spacing)
+                c.drawImage(path, margin, y - dh, width=dw, height=dh, preserveAspectRatio=True, mask='auto')
                 y -= dh
                 if idx < len(scaled) - 1:
                     y -= gap_img
@@ -441,11 +440,12 @@ def generate_pdf(
 
         # === Footer: SHA-256 only (no RFC) ===
         # Position SHA section at bottom with proper spacing
-        sha_section_bottom = margin + 0.30 * inch  # Reduced from 0.35 to 0.2 to close gap
+        sha_section_bottom = margin + 0.3 * inch  # Increased from 0.2 to 0.3 for clearance
         sha_section_top = sha_section_bottom + hashes_h
         
         # Draw SHA section
         y = sha_section_top
+        y += 0.1 * inch  # Add padding above SHA heading for clearance
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "SHA-256 Verification")
         y -= 0.16 * inch
