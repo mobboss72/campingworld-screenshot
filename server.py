@@ -2,7 +2,7 @@
 import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io, re
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-from rfc3161ng import RemoteTimestamper, get_hash_oid
+from rfc3161ng import RemoteTimestamper  # decode import happens inside the function for compat
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -231,6 +231,7 @@ def get_rfc3161_timestamp(file_path):
     digest = hashlib.sha256(file_bytes).digest()
 
     try:
+        # Import here for compatibility with different rfc3161ng versions
         from rfc3161ng import RemoteTimestamper, decode_timestamp_response
     except Exception as e:
         print(f"✗ rfc3161ng not available: {e}")
@@ -1093,7 +1094,7 @@ def admin_dashboard():
         <table>
           <thead>
             <tr>
-              <th>Date</</th>
+              <th>Date</th>
               <th>Captures</th>
             </tr>
           </thead>
@@ -1131,7 +1132,9 @@ def admin_dashboard():
               <td><strong>{{capture.stock}}</strong></td>
               <td><span class="location-badge">{{capture.location}}</span></td>
               <td>{{capture.capture_utc}}</td>
-              <td><a href="/view/{{capture.id}}" class="btn" style="padding: 6px 12px; font-size: 12px;">View PDF</a></td>
+              <td>
+                <a href="/view/{{capture.id}}" class="btn" style="padding: 6px 12px; font-size: 12px;">View PDF</a>
+              </td>
             </tr>
             {% endfor %}
           </tbody>
@@ -1147,6 +1150,7 @@ def admin_dashboard():
       <div class="actions">
         <a href="/admin/cleanup?days={{cleanup_days}}" class="btn btn-secondary">Run Cleanup Now</a>
         <a href="/admin/storage" class="btn btn-secondary" target="_blank">View Storage API</a>
+        <a href="/admin/tsa-diagnostics" class="btn btn-secondary" target="_blank">TSA Diagnostics</a>
         <a href="/history" class="btn">View All Captures</a>
       </div>
     </div>
@@ -1204,6 +1208,102 @@ def tsa_diagnostics():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"results": results})
+
+@app.get("/admin/backfill-tsa/<int:capture_id>")
+@require_admin_auth
+def admin_backfill_tsa(capture_id):
+    try:
+        with get_db() as conn:
+            row = conn.execute("SELECT * FROM captures WHERE id = ?", (capture_id,)).fetchone()
+            if not row:
+                return jsonify({"error": "capture not found"}), 404
+
+            price_path = row['price_screenshot_path']
+            pay_path   = row['payment_screenshot_path']
+            price_path = price_path if (price_path and os.path.exists(price_path)) else None
+            pay_path   = pay_path   if (pay_path and os.path.exists(pay_path))   else None
+
+            if not price_path and not pay_path:
+                return jsonify({"error": "no screenshots available to timestamp"}), 400
+
+            price_tsa = row['price_tsa']
+            pay_tsa   = row['payment_tsa']
+            updates = {}
+
+            # Timestamp price if needed
+            rfc_price = None
+            if price_path and not price_tsa:
+                try:
+                    rfc_price = get_rfc3161_timestamp(price_path)
+                    if rfc_price:
+                        updates['price_tsa'] = rfc_price['tsa']
+                        updates['price_timestamp'] = rfc_price['timestamp']
+                except Exception as e:
+                    print(f"⚠ backfill price TSA failed: {e}")
+
+            # Timestamp payment if needed
+            rfc_pay = None
+            if pay_path and not pay_tsa:
+                try:
+                    rfc_pay = get_rfc3161_timestamp(pay_path)
+                    if rfc_pay:
+                        updates['payment_tsa'] = rfc_pay['tsa']
+                        updates['payment_timestamp'] = rfc_pay['timestamp']
+                except Exception as e:
+                    print(f"⚠ backfill payment TSA failed: {e}")
+
+            # If nothing changed, still reconstruct RFC dicts from DB for regeneration
+            if not rfc_price and row['price_tsa']:
+                rfc_price = {
+                    "tsa": row['price_tsa'],
+                    "timestamp": row['price_timestamp'],
+                    "cert_info": None
+                }
+            if not rfc_pay and row['payment_tsa']:
+                rfc_pay = {
+                    "tsa": row['payment_tsa'],
+                    "timestamp": row['payment_timestamp'],
+                    "cert_info": None
+                }
+
+            # Write DB updates if any
+            if updates:
+                set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+                vals = list(updates.values()) + [capture_id]
+                conn.execute(f"UPDATE captures SET {set_clause} WHERE id = ?", vals)
+
+            # Regenerate PDF with the (possibly) new timestamps
+            pdf_path = generate_pdf(
+                stock=row['stock'],
+                location=row['location'],
+                zip_code=row['zip_code'],
+                url=row['url'],
+                utc_time=row['capture_utc'],
+                https_date_value=row['https_date'],
+                price_path=price_path,
+                pay_path=pay_path,
+                sha_price=row['price_sha256'] or "N/A",
+                sha_pay=row['payment_sha256'] or "N/A",
+                rfc_price=rfc_price,
+                rfc_pay=rfc_pay,
+                debug_info=row['debug_info']
+            )
+
+            if pdf_path and os.path.exists(pdf_path):
+                conn.execute("UPDATE captures SET pdf_path = ? WHERE id = ?", (pdf_path, capture_id))
+                return send_file(
+                    pdf_path,
+                    mimetype="application/pdf",
+                    as_attachment=True,
+                    download_name=f"CW_Capture_{row['stock']}_{capture_id}.pdf"
+                )
+
+            return jsonify({"ok": True, "message": "timestamps updated, but PDF could not be regenerated"}), 200
+
+    except Exception as e:
+        print(f"❌ backfill error: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 @app.get("/history")
 def history():
