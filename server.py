@@ -333,6 +333,167 @@ def _fit_dims(iw, ih, max_w, max_h):
     scale = min(max_w / float(iw), max_h / float(ih))
     return iw * scale, ih * scale
 
+from reportlab.pdfgen import canvas as pdfcanvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
+from PIL import Image as PILImage
+import io, os, traceback, tempfile
+
+def _load_image_reader(path_or_bytes):
+    try:
+        if isinstance(path_or_bytes, (bytes, bytearray)):
+            im = PILImage.open(io.BytesIO(path_or_bytes))
+        else:
+            im = PILImage.open(path_or_bytes)
+        if im.mode in ("P", "RGBA", "LA"):
+            im = im.convert("RGB")
+        w, h = im.size
+        bio = io.BytesIO()
+        im.save(bio, format="PNG")
+        bio.seek(0)
+        return ImageReader(bio), w, h
+    except Exception as e:
+        raise RuntimeError(f"Image load failed for {path_or_bytes}: {e}")
+
+def _fit_dims(iw, ih, max_w, max_h):
+    if iw <= 0 or ih <= 0:
+        return 0, 0
+    scale = min(max_w / float(iw), max_h / float(ih))
+    return iw * scale, ih * scale
+
+def generate_pdf(
+    stock, location, zip_code, url, utc_time, https_date_value,
+    price_path, pay_path, sha_price, sha_pay,
+    rfc_price=None, rfc_pay=None, debug_info="",
+    sign_image_path=None
+):
+    try:
+        page_w, page_h = letter
+        margin = 0.35 * inch
+        gap_small = 0.10 * inch
+        gap_img   = 0.20 * inch
+        title_h   = 0.25 * inch
+        meta_line_h = 0.16 * inch
+
+        if price_path and os.path.exists(price_path):
+            out_dir = os.path.dirname(price_path)
+        elif pay_path and os.path.exists(pay_path):
+            out_dir = os.path.dirname(pay_path)
+        else:
+            out_dir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+
+        pdf_path = os.path.join(out_dir, f"cw_{stock}_report.pdf")
+        c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
+
+        def draw_wrapped(text, x, y, max_width, font="Helvetica", size=8, leading=11):
+            c.setFont(font, size)
+            words = (text or "").split()
+            line, used = "", 0
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, font, size) <= max_width:
+                    line = test
+                else:
+                    c.drawString(x, y - used, line); used += leading; line = w
+            if line:
+                c.drawString(x, y - used, line); used += leading
+            return used
+
+        # Header
+        y = page_h - margin
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(margin, y, "Camping World Compliance Capture Report")
+        y -= title_h
+
+        c.setFont("Helvetica", 8)
+        max_text = page_w - 2 * margin
+        meta = [
+            f"Stock: {stock}",
+            f"Location: {location} (ZIP: {zip_code})",
+            f"URL: {url or 'N/A'}",
+            f"Capture Time (UTC): {utc_time}",
+            f"HTTPS Date: {https_date_value or 'N/A'}",
+        ]
+        for line in meta:
+            if line.startswith("URL: "):
+                y -= draw_wrapped(line, margin, y, max_text, size=8, leading=11)
+            else:
+                c.drawString(margin, y, line); y -= meta_line_h
+        y -= gap_small
+
+        # Page 1 images
+        price_ok = bool(price_path and os.path.exists(price_path))
+        pay_ok   = bool(pay_path and os.path.exists(pay_path))
+        items = []
+        if price_ok: items.append(("Price Disclosure", price_path))
+        if pay_ok:   items.append(("Payment Disclosure", pay_path))
+
+        c.setFont("Courier", 7)
+        footer_h = 0.35 * inch
+        if sha_price and sha_price != "N/A": footer_h += 0.18 * inch
+        if sha_pay and sha_pay != "N/A":     footer_h += 0.18 * inch
+
+        avail_h = max(0, (y - margin) - footer_h)
+        max_img_w = page_w - 2 * margin
+
+        y_top = margin + footer_h + avail_h
+        y_cursor = y_top
+        for idx, (label, path) in enumerate(items):
+            try:
+                ir, iw, ih = _load_image_reader(path)
+            except Exception as e:
+                c.setFont("Helvetica", 8)
+                c.drawString(margin, y_cursor - 0.14*inch, f"({label} failed: {e})")
+                y_cursor -= 0.28*inch
+                continue
+
+            unit_h = avail_h if len(items) == 1 else max(avail_h / len(items) - gap_img/2, 0.5*inch)
+            dw, dh = _fit_dims(iw, ih, max_img_w, unit_h)
+            if dw <= 0 or dh <= 0: continue
+            c.setFont("Helvetica", 8)
+            c.drawString(margin, y_cursor - 0.12*inch, label)
+            y_cursor -= 0.24*inch
+            c.drawImage(ir, margin, y_cursor - dh, width=dw, height=dh, mask='auto')
+            y_cursor -= dh
+            if idx < len(items)-1: y_cursor -= 0.20 * inch
+
+        # Footer
+        yf = margin + 0.18 * inch
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(margin, yf + 0.12 * inch, "SHA-256 Verification")
+        c.setFont("Courier", 7)
+        def fh(label, val, y):
+            txt = f"{label}: {val or 'N/A'}"
+            y -= 0.14 * inch
+            c.drawString(margin, y, txt)
+            return y
+        if sha_price and sha_price != "N/A": yf = fh("Price Disclosure", sha_price, yf)
+        if sha_pay   and sha_pay   != "N/A": yf = fh("Payment Disclosure", sha_pay, yf)
+
+        # Page 2 (sign)
+        c.showPage()
+        if sign_image_path and os.path.exists(sign_image_path):
+            try:
+                ir, iw, ih = _load_image_reader(sign_image_path)
+                c.setFont("Helvetica-Bold", 14)
+                c.drawString(margin, page_h - margin - title_h, f"Store Sign — Stock #{stock}")
+                max_w, max_h = (page_w - 2*margin), (page_h - 2*margin - title_h - 0.15*inch)
+                dw, dh = _fit_dims(iw, ih, max_w, max_h)
+                y_img = (page_h - margin - title_h) - 0.20 * inch
+                c.drawImage(ir, margin, y_img - dh, width=dw, height=dh, mask='auto')
+            except Exception as e:
+                c.setFont("Helvetica", 9)
+                c.drawString(margin, page_h - margin - title_h - 0.3*inch, f"(Sign image failed: {e})")
+
+        c.save()
+        return pdf_path
+
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        return None
+
 def generate_pdf(
     stock, location, zip_code, url, utc_time, https_date_value,
     price_path, pay_path, sha_price, sha_pay,
@@ -1722,10 +1883,6 @@ def admin_backfill_tsa(capture_id):
         
         return jsonify({"ok": True, "message": "timestamps updated, but PDF could not be regenerated"}), 200
 
-        download_name=f"CW_Capture_{row['stock']}_{capture_id}.pdf"
-    )
-
-return jsonify({"ok": True, "message": "timestamps updated, but PDF could not be regenerated"}), 200
 
     except Exception as e:
         print(f"❌ backfill error: {e}")
