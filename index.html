@@ -4,14 +4,156 @@
   <meta charset="UTF-8">
   <title>CW Compliance Capture Tool</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
+  
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="googlebot" content="noindex, nofollow">
+  
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-
+  
   <style>
-    /* All your original CSS here — keeping unchanged */
-    /* ...TRUNCATED for brevity... (unchanged from original index-2.html) */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --text-primary: #1d1d1f;
+      --text-secondary: #6e6e73;
+      --bg-primary: #fbfbfd;
+      --bg-card: #ffffff;
+      --accent: #0071e3;
+      --accent-hover: #0077ed;
+      --border: rgba(0, 0, 0, 0.06);
+      --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.04);
+      --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+      --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --text-primary: #f5f5f7;
+        --text-secondary: #a1a1a6;
+        --bg-primary: #000000;
+        --bg-card: #1d1d1f;
+        --accent: #0a84ff;
+        --accent-hover: #409cff;
+        --border: rgba(255, 255, 255, 0.1);
+        --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+        --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+        --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
+      }
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .container {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 0 22px;
+    }
+
+    /* Header */
+    header {
+      background: var(--bg-card);
+      backdrop-filter: saturate(180%) blur(20px);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 16px 0;
+    }
+
+    header .container {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-size: 21px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 32px;
+      align-items: center;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 400;
+      transition: color 0.2s ease;
+    }
+
+    .nav-links a:hover {
+      color: var(--text-primary);
+    }
+
+    /* Hero Section */
+    .hero {
+      text-align: center;
+      padding: 80px 0 60px;
+    }
+
+    h1 {
+      font-size: 56px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      margin-bottom: 16px;
+      background: linear-gradient(135deg, var(--text-primary) 0%, var(--text-secondary) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .subtitle {
+      font-size: 24px;
+      font-weight: 400;
+      color: var(--text-secondary);
+      margin-bottom: 48px;
+      max-width: 640px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    /* Feature Cards */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-bottom: 60px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 32px 28px;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .feature-card:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg);
+      border-color: var(--accent);
+    }
+
     .feature-icon {
       width: 48px;
       height: 48px;
@@ -20,8 +162,139 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      font-size: 24px;
       margin-bottom: 20px;
     }
+
+    .feature-card h3 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      letter-spacing: -0.01em;
+    }
+
+    .feature-card p {
+      font-size: 15px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    /* Capture Form */
+    .capture-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 48px;
+      margin-bottom: 60px;
+      box-shadow: var(--shadow-md);
+    }
+
+    .capture-section h2 {
+      font-size: 32px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      letter-spacing: -0.015em;
+    }
+
+    .section-description {
+      color: var(--text-secondary);
+      font-size: 17px;
+      margin-bottom: 36px;
+      line-height: 1.5;
+    }
+
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    label {
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
+    }
+
+    select, input[type="text"] {
+      padding: 14px 16px;
+      font-size: 17px;
+      font-family: inherit;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text-primary);
+      transition: all 0.2s ease;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    select {
+      background-image: url("data:image/svg+xml,%3Csvg width='12' height='8' viewBox='0 0 12 8' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%236e6e73' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 16px center;
+      padding-right: 44px;
+    }
+
+    select:focus, input[type="text"]:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px rgba(0, 113, 227, 0.1);
+    }
+
+    button {
+      background: var(--accent);
+      color: white;
+      font-size: 17px;
+      font-weight: 500;
+      padding: 16px 32px;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: inherit;
+      letter-spacing: -0.01em;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 8px 16px rgba(0, 113, 227, 0.3);
+    }
+
+    button:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 24px;
+      color: var(--text-secondary);
+      font-size: 15px;
+    }
+
+    .loading.active {
+      display: block;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
     .spinner {
       width: 24px;
       height: 24px;
@@ -32,12 +305,358 @@
       margin-right: 12px;
       animation: spin 0.8s linear infinite;
     }
+
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
-    @keyframes pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
+
+    /* History Link */
+    .history-section {
+      text-align: center;
+      margin-bottom: 60px;
+    }
+
+    .history-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      text-decoration: none;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .history-link:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+    }
+
+    /* How It Works */
+    .how-it-works {
+      margin-bottom: 60px;
+    }
+
+    .how-it-works h2 {
+      font-size: 32px;
+      font-weight: 600;
+      margin-bottom: 40px;
+      text-align: center;
+      letter-spacing: -0.015em;
+    }
+
+    .steps {
+      display: grid;
+      gap: 32px;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 60px 1fr;
+      gap: 24px;
+      align-items: start;
+    }
+
+    .step-number {
+      width: 60px;
+      height: 60px;
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .step-content h3 {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+
+    .step-content p {
+      color: var(--text-secondary);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* Footer */
+    footer {
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      padding: 32px 0;
+      margin-top: 80px;
+    }
+
+    footer .container {
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .container {
+        padding: 0 20px;
+      }
+
+      h1 {
+        font-size: 48px;
+      }
+
+      .subtitle {
+        font-size: 21px;
+      }
+
+      .features {
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      }
+    }
+
+    @media (max-width: 768px) {
+      header {
+        padding: 12px 0;
+      }
+
+      header .container {
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .logo {
+        font-size: 18px;
+      }
+
+      .nav-links {
+        gap: 16px;
+        font-size: 13px;
+      }
+
+      h1 {
+        font-size: 36px;
+      }
+
+      .subtitle {
+        font-size: 18px;
+        margin-bottom: 40px;
+      }
+
+      .hero {
+        padding: 40px 0 32px;
+      }
+
+      .capture-section {
+        padding: 32px 20px;
+        border-radius: 20px;
+      }
+
+      .capture-section h2 {
+        font-size: 28px;
+      }
+
+      .section-description {
+        font-size: 15px;
+      }
+
+      .features {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+
+      .feature-card {
+        padding: 24px 20px;
+      }
+
+      .feature-icon {
+        width: 44px;
+        height: 44px;
+        font-size: 22px;
+      }
+
+      .feature-card h3 {
+        font-size: 18px;
+      }
+
+      .feature-card p {
+        font-size: 14px;
+      }
+
+      .how-it-works h2 {
+        font-size: 28px;
+      }
+
+      .step {
+        grid-template-columns: 50px 1fr;
+        gap: 16px;
+      }
+
+
+      .step-number {
+        width: 50px;
+        height: 50px;
+        font-size: 20px;
+      }
+
+      .step-content h3 {
+        font-size: 18px;
+      }
+
+      .step-content p {
+        font-size: 14px;
+      }
+
+      select, input[type="text"] {
+        padding: 12px 14px;
+        font-size: 16px;
+      }
+
+      button {
+        padding: 14px 28px;
+        font-size: 16px;
+      }
+
+      footer {
+        margin-top: 60px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 0 16px;
+      }
+
+      h1 {
+        font-size: 32px;
+      }
+
+      .subtitle {
+        font-size: 16px;
+      }
+
+      .hero {
+        padding: 32px 0 24px;
+      }
+
+      .capture-section {
+        padding: 24px 16px;
+        border-radius: 16px;
+      }
+
+      .capture-section h2 {
+        font-size: 24px;
+      }
+
+      .feature-card {
+        padding: 20px 16px;
+        border-radius: 16px;
+      }
+
+      .how-it-works h2 {
+        font-size: 24px;
+        margin-bottom: 32px;
+      }
+
+      .steps {
+        gap: 24px;
+      }
+
+      .step {
+        grid-template-columns: 44px 1fr;
+        gap: 12px;
+      }
+
+      .step-number {
+        width: 44px;
+        height: 44px;
+        font-size: 18px;
+      }
+
+      .step-content h3 {
+        font-size: 17px;
+      }
+
+      .step-content p {
+        font-size: 13px;
+      }
+
+      .history-link {
+        padding: 10px 20px;
+        font-size: 14px;
+      }
+
+      form {
+        gap: 20px;
+      }
+
+      label {
+        font-size: 13px;
+      }
+
+      select, input[type="text"] {
+        padding: 11px 13px;
+        font-size: 16px;
+        border-radius: 10px;
+      }
+
+      select {
+        background-position: right 12px center;
+        padding-right: 38px;
+      }
+
+      button {
+        padding: 13px 24px;
+        font-size: 15px;
+        border-radius: 10px;
+      }
+
+      .loading {
+        padding: 20px;
+        font-size: 14px;
+      }
+
+      .spinner {
+        width: 20px;
+        height: 20px;
+        margin-right: 10px;
+      }
+
+      footer {
+        padding: 24px 0;
+        margin-top: 48px;
+      }
+
+      footer .container {
+        font-size: 12px;
+      }
+    }
+
+    /* Extra small devices */
+    @media (max-width: 360px) {
+      h1 {
+        font-size: 28px;
+      }
+
+      .subtitle {
+        font-size: 15px;
+      }
+
+      .capture-section h2 {
+        font-size: 22px;
+      }
+
+      .feature-card h3,
+      .step-content h3 {
+        font-size: 16px;
+      }
     }
   </style>
 </head>
@@ -81,7 +700,7 @@
             <label for="stock">Stock Number</label>
             <input type="text" name="stock" id="stock" placeholder="2607628P" required pattern="[a-zA-Z0-9]+" title="Please enter a stock number (e.g., 2607628P)">
           </div>
-
+          
           <button type="submit" id="submitBtn">Run Capture</button>
         </form>
 
@@ -93,52 +712,75 @@
 
       <div class="features">
         <div class="feature-card">
-          <div class="feature-icon">
-            <!-- Lock SVG -->
-            <svg xmlns="http://www.w3.org/2000/svg" fill="white" viewBox="0 0 24 24" width="24" height="24">
-              <path d="M12 1a5 5 0 00-5 5v4H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2h-1V6a5 5 0 00-5-5zm-3 5a3 3 0 116 0v4H9V6zm3 7a2 2 0 110 4 2 2 0 010-4z"/>
-            </svg>
-          </div>
+          <div class="feature-icon">🔒</div>
           <h3>Legally Verifiable</h3>
           <p>RFC 3161 cryptographic timestamps and SHA-256 hashes ensure authenticity for legal proceedings</p>
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon">
-            <!-- Bolt SVG -->
-            <svg xmlns="http://www.w3.org/2000/svg" fill="white" viewBox="0 0 24 24" width="24" height="24">
-              <path d="M13 2L3 14h7v8l10-12h-7z"/>
-            </svg>
-          </div>
+          <div class="feature-icon">⚡</div>
           <h3>Instant PDF Reports</h3>
           <p>Automatically captures pricing tooltips and generates professional PDF documentation in under 60 seconds</p>
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon">
-            <!-- Pin SVG -->
-            <svg xmlns="http://www.w3.org/2000/svg" fill="white" viewBox="0 0 24 24" width="24" height="24">
-              <path d="M12 2C8.14 2 5 5.14 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.86-3.14-7-7-7zm0 9.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5z"/>
-            </svg>
-          </div>
+          <div class="feature-icon">📍</div>
           <h3>Geolocation Spoofing</h3>
-          <p>Simulates browsing from Oregon CW locations with GPS coordinates and ZIP codes</p>
+          <p>Accurately simulates browsing from any of 5 Oregon CW locations with GPS coordinates and ZIP codes</p>
         </div>
       </div>
 
       <div class="history-section">
         <a href="/history" class="history-link">
-          <span class="feature-icon" style="background:none;">
-            <!-- Clipboard SVG -->
-            <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" viewBox="0 0 24 24" width="20" height="20">
-              <path d="M17 3h-2.18A3 3 0 0012 1a3 3 0 00-2.82 2H7a2 2 0 00-2 2v16a2 2 0 002 2h10a2 2 0 002-2V5a2 2 0 00-2-2zM12 3a1 1 0 11-1 1 1 1 0 011-1zm5 18H7V5h2.18a3 3 0 005.64 0H17z"/>
-            </svg>
-          </span>
+          <span>📋</span>
           View Capture History
         </a>
       </div>
 
-      <!-- Keep your how-it-works section unchanged -->
+      <div class="how-it-works" id="how-it-works">
+        <h2>How It Works</h2>
+        <div class="steps">
+          <div class="step">
+            <div class="step-number">1</div>
+            <div class="step-content">
+              <h3>Location Simulation</h3>
+              <p>Select one of 5 Oregon CW locations. The system spoofs browser geolocation with precise GPS coordinates (latitude/longitude) and injects the corresponding ZIP code. This ensures the CW website detects the correct location and displays accurate regional pricing, financing terms, and availability.</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">2</div>
+            <div class="step-content">
+              <h3>Automated Screenshot Capture</h3>
+              <p>A headless Chromium browser navigates to the listing and automatically triggers pricing tooltips. Full-page screenshots capture both the total price breakdown (MSRP, discounts, fees) and estimated payment details including APR, loan term, down payment, and monthly payment amount.</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">3</div>
+            <div class="step-content">
+              <h3>Cryptographic Timestamping</h3>
+              <p>Each screenshot receives an RFC 3161 cryptographic timestamp from trusted Time Stamping Authorities (DigiCert, Apple, Starfield, or GlobalSign). This provides legally admissible proof of when the capture occurred and generates SHA-256 hashes to verify file integrity.</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">4</div>
+            <div class="step-content">
+              <h3>Professional PDF Generation</h3>
+              <p>The system compiles both screenshots side-by-side in a comprehensive PDF report including all metadata, timestamps, verification hashes, and capture details. The PDF automatically downloads to your computer as the permanent legal record.</p>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number">5</div>
+            <div class="step-content">
+              <h3>Database Audit Trail</h3>
+              <p>All capture metadata is stored in a secure database for future reference. While screenshots are automatically cleaned up after 7 days to prevent storage bloat, the audit trail with hashes and timestamps remains permanently accessible.</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -155,35 +797,10 @@
     const submitBtn = document.getElementById('submitBtn');
     const loading = document.getElementById('loading');
 
-    form.addEventListener('submit', async function(e) {
-      e.preventDefault();
-
+    form.addEventListener('submit', function(e) {
       submitBtn.disabled = true;
       submitBtn.textContent = 'Processing...';
       loading.classList.add('active');
-
-      const formData = new FormData(form);
-      try {
-        const response = await fetch(form.action, {
-          method: 'POST',
-          body: formData
-        });
-
-        const result = await response.json();
-
-        if (result.success) {
-          alert('Capture completed successfully.');
-        } else {
-          alert('Capture failed: ' + (result.error || 'Unknown error'));
-        }
-      } catch (error) {
-        console.error('Error during capture:', error);
-        alert('An unexpected error occurred.');
-      } finally {
-        loading.classList.remove('active');
-        submitBtn.disabled = false;
-        submitBtn.textContent = 'Run Capture';
-      }
     });
 
     // Smooth scroll for anchor links
