@@ -273,9 +273,9 @@ def get_rfc3161_timestamp(file_path):
 def generate_pdf(
     stock, location, zip_code, url, utc_time, https_date_value,
     price_path, pay_path, sha_price, sha_pay,
-    rfc_price, rfc_pay, debug_info
+    rfc_price=None, rfc_pay=None, debug_info=""
 ):
-    """Single-page LETTER PDF with stacked screenshots and RFC-3161 footer that always fits."""
+    """Single-page LETTER PDF with stacked screenshots and SHA-256 footer."""
     try:
         from reportlab.pdfgen import canvas as pdfcanvas
         from reportlab.lib.pagesizes import letter
@@ -356,37 +356,11 @@ def generate_pdf(
             max_text_width = page_w - 2 * margin
             if sha_price and sha_price != "N/A":
                 h += measure_wrapped_height(f"Price Disclosure: {sha_price}", max_text_width, font="Courier", size=7, leading=9)
+                h += 0.08 * inch  # Extra padding after each hash
             if sha_pay and sha_pay != "N/A":
                 h += measure_wrapped_height(f"Payment Disclosure: {sha_pay}", max_text_width, font="Courier", size=7, leading=9)
-            h += 0.04 * inch
-            return h
-
-        def measure_rfc_height():
-            h = 0
-            # Heading
-            h += 0.16 * inch
-            max_text_width = page_w - 2 * margin
-
-            def block_height(label, data):
-                if not data:
-                    return 0.14 * inch
-                lines = [
-                    f"{label}:",
-                    f"  Timestamp: {data.get('timestamp', 'N/A')}",
-                    f"  TSA: {data.get('tsa', 'N/A')}",
-                ]
-                token = data.get("token_file")
-                if token:
-                    lines.append(f"  Token: {os.path.basename(token)}")
-                elif data.get("cert_info"):
-                    lines.append(f"  Info: {data['cert_info']}")
-                total = 0
-                for ln in lines:
-                    total += measure_wrapped_height(ln, max_text_width, font="Helvetica", size=8, leading=11)
-                return total + 2  # micro spacer
-
-            h += block_height("Price", rfc_price)
-            h += block_height("Payment", rfc_pay)
+                h += 0.08 * inch  # Extra padding after each hash
+            h += 0.15 * inch  # Bottom padding
             return h
 
         # === Page header/meta ===
@@ -418,10 +392,9 @@ def generate_pdf(
             c.drawString(margin, y, "Used RV selected — no pricing breakdown needed.")
             y -= (gap_small + 0.05 * inch)
 
-        # === Footer sizing ===
+        # === Footer sizing (SHA-256 only, no RFC) ===
         hashes_h = measure_hash_height()
-        rfc_h    = measure_rfc_height()
-        footer_needed = hashes_h + rfc_h + 0.15 * inch  # safety buffer
+        footer_needed = hashes_h + 0.25 * inch  # Extra padding between images and footer
 
         # Space left for images after guaranteeing the footer
         available_for_imgs = max(0, (y - margin) - footer_needed)
@@ -463,33 +436,13 @@ def generate_pdf(
             # No screenshots; just leave the footer space
             pass
 
-        # === Footer positioning: EXPLICIT bottom-up layout ===
-        # Page is 11 inches tall (792 points), margin is typically 0.35"
-        # We need to draw from the bottom margin upward
+        # === Footer: SHA-256 only (no RFC) ===
+        # Position SHA section at bottom with proper spacing
+        sha_section_bottom = margin + 0.25 * inch  # Start above bottom margin
+        sha_section_top = sha_section_bottom + hashes_h
         
-        # Calculate where each section should start (Y coordinate = top of that section)
-        # RFC section is at the very bottom
-        rfc_section_top = margin + rfc_h
-        
-        # SHA section sits directly above RFC section  
-        sha_section_top = rfc_section_top + hashes_h
-        
-        # Update footer_top for image placement calculations
-        footer_top = sha_section_top
-        
-        print(f"\n=== PDF FOOTER DEBUG ===")
-        print(f"Page height: {page_h} points ({page_h/inch:.2f} inches)")
-        print(f"Margin: {margin} points ({margin/inch:.2f} inches)")
-        print(f"SHA section height: {hashes_h} points ({hashes_h/inch:.2f} inches)")
-        print(f"RFC section height: {rfc_h} points ({rfc_h/inch:.2f} inches)")
-        print(f"Footer total height: {footer_needed} points ({footer_needed/inch:.2f} inches)")
-        print(f"RFC section top (Y): {rfc_section_top} points ({rfc_section_top/inch:.2f} inches from bottom)")
-        print(f"SHA section top (Y): {sha_section_top} points ({sha_section_top/inch:.2f} inches from bottom)")
-        print(f"======================\n")
-
-        # === Draw SHA-256 section ===
+        # Draw SHA section
         y = sha_section_top
-        print(f"Drawing 'SHA-256 Verification' at Y={y} ({y/inch:.2f} inches from bottom)")
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "SHA-256 Verification")
         y -= 0.16 * inch
@@ -497,45 +450,15 @@ def generate_pdf(
 
         def draw_hash(label, value, y):
             txt = f"{label}: {value or 'N/A'}"
-            print(f"Drawing hash '{label}' starting at Y={y} ({y/inch:.2f} inches from bottom)")
             used_h = draw_wrapped_line(txt, margin, y, max_text_width, font="Courier", size=7, leading=9)
-            return y - used_h
+            y -= used_h
+            y -= 0.08 * inch  # Add padding after each hash
+            return y
 
         if sha_price and sha_price != "N/A":
             y = draw_hash("Price Disclosure", sha_price, y)
         if sha_pay and sha_pay != "N/A":
             y = draw_hash("Payment Disclosure", sha_pay, y)
-
-        # === Draw RFC-3161 section ===
-        y = rfc_section_top
-        print(f"Drawing 'RFC-3161 Timestamps' at Y={y} ({y/inch:.2f} inches from bottom)")
-        c.setFont("Helvetica-Bold", 10)
-        c.drawString(margin, y, "RFC-3161 Timestamps")
-        y -= 0.16 * inch
-        c.setFont("Helvetica", 8)
-
-        def draw_rfc(label, data, y):
-            if not data:
-                c.drawString(margin, y, f"{label}: N/A")
-                return y - 0.14 * inch
-            lines = [
-                f"{label}:",
-                f"  Timestamp: {data.get('timestamp', 'N/A')}",
-                f"  TSA: {data.get('tsa', 'N/A')}",
-            ]
-            token = data.get("token_file")
-            if token:
-                lines.append(f"  Token: {os.path.basename(token)}")
-            elif data.get("cert_info"):
-                lines.append(f"  Info: {data['cert_info']}")
-            used = 0
-            for ln in lines:
-                used += draw_wrapped_line(ln, margin, y - used, max_text_width, font="Helvetica", size=8, leading=11)
-            return y - used - 2
-
-        y = draw_rfc("Price", rfc_price, y)
-        y = draw_rfc("Payment", rfc_pay, y)
-        # We should now be above or right at the margin line.
 
         c.showPage()
         c.save()
@@ -1655,25 +1578,12 @@ def capture():
         sha_price = sha256_file(price_path) if price_ok else "N/A"
         sha_pay   = sha256_file(pay_path)   if pay_ok   else "N/A"
 
+        # RFC-3161 timestamps removed - not used in PDF
         rfc_price = None
         rfc_pay = None
-        try:
-            rfc_price = get_rfc3161_timestamp(price_path) if price_ok else None
-        except Exception as e:
-            print(f"⚠ RFC 3161 timestamp failed for price: {e}")
-        try:
-            rfc_pay = get_rfc3161_timestamp(pay_path) if pay_ok else None
-        except Exception as e:
-            print(f"⚠ RFC 3161 timestamp failed for payment: {e}")
+        # Skipping timestamp generation for performance
 
-        if rfc_price:
-            debug_info += f"\nRFC3161_PRICE_OK={rfc_price.get('timestamp')}"
-        else:
-            debug_info += "\nRFC3161_PRICE_OK=FALSE"
-        if rfc_pay:
-            debug_info += f"\nRFC3161_PAY_OK={rfc_pay.get('timestamp')}"
-        else:
-            debug_info += "\nRFC3161_PAY_OK=FALSE"
+        # RFC-3161 timestamps removed from PDF
 
         pdf_path = None
         if price_ok or pay_ok:
