@@ -8,6 +8,8 @@ import sqlite3
 from contextlib import contextmanager
 from functools import wraps
 import threading
+from reportlab.lib.utils import ImageReader
+
 
 # -------------------- Railway-friendly defaults & config --------------------
 
@@ -27,6 +29,10 @@ STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")  # persistent or temp
 PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", os.path.join(DEFAULT_DATA_DIR, "captures"))
 AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))
 
+
+# Sign Builder integration
+SIGN_BUILDER_BASE = os.getenv("SIGN_BUILDER_BASE", "https://rv-sign-builder-862473457030.us-central1.run.app")
+SIGN_WAIT_MS = int(os.getenv("SIGN_WAIT_MS", "2000"))
 # Ensure dirs exist
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 os.makedirs(PERSISTENT_STORAGE_PATH, exist_ok=True)
@@ -313,7 +319,13 @@ def generate_pdf(
         else:
             tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
 
-        pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
+
+        # Capture Store Sign image for Page 2 (best-effort; ignore failures)
+        try:
+            sign_image_path = capture_sign_builder_image(stock, tmpdir)
+        except Exception:
+            sign_image_path = None
+            pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
         c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
 
         # Helpers
@@ -464,8 +476,26 @@ def generate_pdf(
             y = draw_hash("Payment Disclosure", sha_pay, y)
 
         c.showPage()
+        # ----- Optional Page 2: Store Sign -----
+        try:
+            if sign_image_path and os.path.exists(sign_image_path):
+                c.setFont("Helvetica-Bold", 14)
+                c.drawString(margin, page_h - margin - title_h, f"Store Sign — Stock #{stock}")
+                try:
+                    sim = PILImage.open(sign_image_path)
+                    sw, sh = sim.width, sim.height
+                    max_w, max_h = (page_w - 2 * margin), (page_h - 2 * margin - title_h)
+                    scale = min(max_w / float(sw), max_h / float(sh))
+                    dw, dh = sw * scale, sh * scale
+                    img_y = (page_h - margin - title_h) - 0.20 * inch
+                    c.drawImage(sign_image_path, margin, img_y - dh, width=dw, height=dh, preserveAspectRatio=True, mask='auto')
+                except Exception as e:
+                    c.setFont("Helvetica", 9)
+                    c.drawString(margin, page_h - margin - title_h - 0.3 * inch, f"(Sign image failed to load: {e})")
+        except Exception as _:
+            pass
         c.save()
-        print(f"✓ PDF generated (one page, dynamic footer): {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
+        print(f"✓ PDF generated ({'two pages' if (sign_image_path and os.path.exists(sign_image_path)) else 'one page'}, dynamic footer): {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
         return pdf_path
 
     except Exception as e:
@@ -806,6 +836,47 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
         traceback.print_exc()
 
     return price_png_path, pay_png_path, final_url, "\n".join(all_debug)
+
+
+# -------------------- Sign Builder capture helper --------------------
+def capture_sign_builder_image(stock: str, out_dir: str = None):
+    """Open Sign Builder with ?stockNumber=<stock> and screenshot the .rv-sign-container element.
+    Saves PNG into out_dir (or a tempdir) and returns the file path. Returns None on failure.
+    """
+    try:
+        if out_dir is None:
+            out_dir = tempfile.mkdtemp(prefix=f"cw-sign-{stock}-")
+        os.makedirs(out_dir, exist_ok=True)
+        out_png = os.path.join(out_dir, f"cw_{stock}_sign.png")
+        url = f"{SIGN_BUILDER_BASE}/?stockNumber={stock}"
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = browser.new_context(viewport={"width": 1600, "height": 1800})
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle", timeout=60_000)
+            page.wait_for_timeout(SIGN_WAIT_MS)
+            selector = ".rv-sign-container"
+            el = None
+            try:
+                page.wait_for_selector(selector, state="visible", timeout=30_000)
+                el = page.query_selector(selector)
+            except Exception:
+                pass
+            if not el:
+                for sel in ["[data-testid='sign-canvas']", ".sign-preview", ".SignPreview", "canvas", "[data-test='sign-preview']"]:
+                    el = page.query_selector(sel)
+                    if el:
+                        break
+            if el:
+                el.screenshot(path=out_png, animations="disabled")
+            else:
+                page.screenshot(path=out_png, full_page=True)
+            context.close(); browser.close()
+        return out_png if os.path.exists(out_png) else None
+    except Exception as e:
+        print(f"⚠ Sign capture failed for stock {stock}: {e}")
+        return None
 
 # -------------------- Routes --------------------
 
