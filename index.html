@@ -296,14 +296,15 @@
     }
 
     .spinner {
+      display: inline-block;
       width: 24px;
       height: 24px;
-      border: 3px solid var(--border);
+      border: 3px solid rgba(0, 113, 227, 0.2);
       border-top-color: var(--accent);
       border-radius: 50%;
-      display: inline-block;
-      margin-right: 12px;
       animation: spin 0.8s linear infinite;
+      margin-right: 12px;
+      vertical-align: middle;
     }
 
     @keyframes spin {
@@ -320,54 +321,66 @@
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      padding: 12px 24px;
+      padding: 14px 28px;
       background: var(--bg-card);
       border: 1px solid var(--border);
+      border-radius: 12px;
       color: var(--text-primary);
       text-decoration: none;
-      border-radius: 12px;
       font-size: 15px;
       font-weight: 500;
       transition: all 0.2s ease;
     }
 
     .history-link:hover {
-      border-color: var(--accent);
       transform: translateY(-2px);
       box-shadow: var(--shadow-md);
+      border-color: var(--accent);
     }
 
     /* How It Works */
     .how-it-works {
-      margin-bottom: 60px;
+      margin-top: 80px;
+      margin-bottom: 80px;
     }
 
     .how-it-works h2 {
-      font-size: 32px;
+      font-size: 40px;
       font-weight: 600;
-      margin-bottom: 40px;
       text-align: center;
-      letter-spacing: -0.015em;
+      margin-bottom: 48px;
+      letter-spacing: -0.02em;
     }
 
     .steps {
-      display: grid;
+      display: flex;
+      flex-direction: column;
       gap: 32px;
     }
 
     .step {
       display: grid;
-      grid-template-columns: 60px 1fr;
-      gap: 24px;
-      align-items: start;
+      grid-template-columns: 56px 1fr;
+      gap: 20px;
+      padding: 28px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      transition: all 0.3s ease;
+    }
+
+    .step:hover {
+      transform: translateX(4px);
+      box-shadow: var(--shadow-md);
+      border-color: var(--accent);
     }
 
     .step-number {
-      width: 60px;
-      height: 60px;
+      width: 56px;
+      height: 56px;
       background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
       color: white;
-      border-radius: 50%;
+      border-radius: 14px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -379,83 +392,43 @@
     .step-content h3 {
       font-size: 20px;
       font-weight: 600;
-      margin-bottom: 8px;
+      margin-bottom: 10px;
       letter-spacing: -0.01em;
     }
 
     .step-content p {
-      color: var(--text-secondary);
       font-size: 15px;
+      color: var(--text-secondary);
       line-height: 1.6;
     }
 
     /* Footer */
     footer {
-      background: var(--bg-card);
-      border-top: 1px solid var(--border);
+      text-align: center;
       padding: 32px 0;
+      border-top: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 13px;
       margin-top: 80px;
     }
 
-    footer .container {
-      text-align: center;
-      color: var(--text-secondary);
-      font-size: 13px;
-    }
-
-    /* Responsive */
-    @media (max-width: 1024px) {
-      .container {
-        padding: 0 20px;
-      }
-
-      h1 {
-        font-size: 48px;
-      }
-
-      .subtitle {
-        font-size: 21px;
-      }
-
-      .features {
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      }
-    }
-
+    /* Responsive Design */
     @media (max-width: 768px) {
-      header {
-        padding: 12px 0;
-      }
-
-      header .container {
-        flex-direction: column;
-        gap: 12px;
-      }
-
-      .logo {
-        font-size: 18px;
-      }
-
-      .nav-links {
-        gap: 16px;
-        font-size: 13px;
-      }
-
       h1 {
-        font-size: 36px;
+        font-size: 40px;
       }
 
       .subtitle {
         font-size: 18px;
-        margin-bottom: 40px;
+        margin-bottom: 36px;
       }
 
       .hero {
-        padding: 40px 0 32px;
+        padding: 48px 0 40px;
       }
 
       .capture-section {
-        padding: 32px 20px;
+        padding: 32px 24px;
         border-radius: 20px;
       }
 
@@ -464,45 +437,32 @@
       }
 
       .section-description {
-        font-size: 15px;
+        font-size: 16px;
       }
 
       .features {
         grid-template-columns: 1fr;
-        gap: 16px;
-      }
-
-      .feature-card {
-        padding: 24px 20px;
-      }
-
-      .feature-icon {
-        width: 44px;
-        height: 44px;
-        font-size: 22px;
-      }
-
-      .feature-card h3 {
-        font-size: 18px;
-      }
-
-      .feature-card p {
-        font-size: 14px;
       }
 
       .how-it-works h2 {
-        font-size: 28px;
+        font-size: 32px;
+        margin-bottom: 40px;
+      }
+
+      .how-it-works {
+        margin-top: 60px;
+        margin-bottom: 60px;
       }
 
       .step {
-        grid-template-columns: 50px 1fr;
+        grid-template-columns: 48px 1fr;
         gap: 16px;
+        padding: 24px;
       }
 
-
       .step-number {
-        width: 50px;
-        height: 50px;
+        width: 48px;
+        height: 48px;
         font-size: 20px;
       }
 
@@ -514,13 +474,8 @@
         font-size: 14px;
       }
 
-      select, input[type="text"] {
-        padding: 12px 14px;
-        font-size: 16px;
-      }
-
-      button {
-        padding: 14px 28px;
+      .history-link {
+        padding: 12px 24px;
         font-size: 16px;
       }
 
@@ -675,14 +630,14 @@
     <section class="hero">
       <div class="container">
         <h1>Automatic Screenshot Capture</h1>
-        <p class="subtitle">Automated Screenshots for CW RV listings with cryptographic timestamps and verification</p>
+        <p class="subtitle">Automated Screenshots for CW RV listings with cryptographic verification and timestamped documentation</p>
       </div>
     </section>
 
     <section class="container">
       <div class="capture-section">
         <h2>Run Capture</h2>
-        <p class="section-description">Enter a CW RV stock number and select your location. The system will spoof GPS coordinates and ZIP codes to match the selected CW location, then capture pricing details with full legal documentation including cryptographic timestamps.</p>
+        <p class="section-description">Enter a CW RV stock number and select your location. The system will spoof GPS coordinates and ZIP codes to match the selected CW location, then capture pricing details with full legal documentation.</p>
 
         <form method="POST" action="/capture" id="captureForm">
           <div class="form-group">
@@ -713,20 +668,20 @@
       <div class="features">
         <div class="feature-card">
           <div class="feature-icon">🔒</div>
-          <h3>Legally Verifiable</h3>
-          <p>RFC 3161 cryptographic timestamps and SHA-256 hashes ensure authenticity for legal proceedings</p>
+          <h3>SHA-256 Verification</h3>
+          <p>Cryptographic hashes ensure file integrity and authenticity. Each screenshot is fingerprinted for legal verification.</p>
         </div>
 
         <div class="feature-card">
-          <div class="feature-icon">⚡</div>
-          <h3>Instant PDF Reports</h3>
-          <p>Automatically captures pricing tooltips and generates professional PDF documentation in under 60 seconds</p>
+          <div class="feature-icon">⏰</div>
+          <h3>Timestamped Captures</h3>
+          <p>UTC timestamps and HTTPS server dates provide verifiable proof of when pricing information was captured.</p>
         </div>
 
         <div class="feature-card">
           <div class="feature-icon">📍</div>
           <h3>Geolocation Spoofing</h3>
-          <p>Accurately simulates browsing from any of 5 Oregon CW locations with GPS coordinates and ZIP codes</p>
+          <p>Accurately simulates browsing from any of 5 Oregon CW locations with GPS coordinates and ZIP codes.</p>
         </div>
       </div>
 
@@ -759,8 +714,8 @@
           <div class="step">
             <div class="step-number">3</div>
             <div class="step-content">
-              <h3>Cryptographic Timestamping</h3>
-              <p>Each screenshot receives an RFC 3161 cryptographic timestamp from trusted Time Stamping Authorities (DigiCert, Apple, Starfield, or GlobalSign). This provides legally admissible proof of when the capture occurred and generates SHA-256 hashes to verify file integrity.</p>
+              <h3>Cryptographic Verification</h3>
+              <p>Each screenshot is processed with SHA-256 cryptographic hashing to create a unique fingerprint. Combined with UTC capture timestamps and HTTPS server dates, this provides tamper-evident proof of authenticity for legal documentation.</p>
             </div>
           </div>
 
@@ -768,7 +723,7 @@
             <div class="step-number">4</div>
             <div class="step-content">
               <h3>Professional PDF Generation</h3>
-              <p>The system compiles both screenshots side-by-side in a comprehensive PDF report including all metadata, timestamps, verification hashes, and capture details. The PDF automatically downloads to your computer as the permanent legal record.</p>
+              <p>The system compiles both screenshots in a comprehensive PDF report including all metadata, SHA-256 hashes, capture timestamps, and verification details. The PDF automatically downloads to your computer as the permanent legal record.</p>
             </div>
           </div>
 
@@ -776,7 +731,7 @@
             <div class="step-number">5</div>
             <div class="step-content">
               <h3>Database Audit Trail</h3>
-              <p>All capture metadata is stored in a secure database for future reference. While screenshots are automatically cleaned up after 7 days to prevent storage bloat, the audit trail with hashes and timestamps remains permanently accessible.</p>
+              <p>All capture metadata is stored in a secure database for future reference. While screenshots are automatically cleaned up after 90 days to prevent storage bloat, the audit trail with hashes and timestamps remains permanently accessible.</p>
             </div>
           </div>
         </div>
@@ -786,7 +741,7 @@
 
   <footer>
     <div class="container">
-      © 2025 CW Compliance Tool · Internal Use Only · v4.1 · Geolocation Enabled
+      © 2025 CW Compliance Tool · Internal Use Only · v4.2 · SHA-256 Verified
       <br>
       <a href="/admin" style="font-family: 'Courier New', monospace; font-size: 11px; color: #9ca3af; text-decoration: none; margin-top: 8px; display: inline-block;">admin</a>
     </div>
