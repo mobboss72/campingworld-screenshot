@@ -265,10 +265,11 @@ def generate_pdf(
     price_path, pay_path, sha_price, sha_pay,
     rfc_price, rfc_pay, debug_info
 ):
-    """Single-page LETTER PDF with stacked screenshots and RFC-3161 footer."""
+    """Single-page LETTER PDF with stacked screenshots and RFC-3161 footer that always fits."""
     try:
         from reportlab.pdfgen import canvas as pdfcanvas
         from reportlab.lib.pagesizes import letter
+        from reportlab.lib.units import inch
 
         page_w, page_h = letter
         margin = 0.35 * inch
@@ -276,7 +277,7 @@ def generate_pdf(
         gap_img   = 0.15 * inch
         title_h   = 0.25 * inch
         meta_line_h = 0.16 * inch
-        footer_min = 0.90 * inch  # reserved space for hashes + timestamps
+        debug_boxes = os.getenv("PDF_DEBUG_BOXES", "0") == "1"
 
         price_ok = bool(price_path and os.path.exists(price_path))
         pay_ok   = bool(pay_path and os.path.exists(pay_path))
@@ -302,14 +303,7 @@ def generate_pdf(
         pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
         c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
 
-        y = page_h - margin
-
-        # Title
-        c.setFont("Helvetica-Bold", 14)
-        c.drawString(margin, y, "Camping World Compliance Capture Report")
-        y -= title_h
-
-        # Wrap helper
+        # Helpers
         def draw_wrapped_line(text, x, y, max_width, font="Helvetica", size=8, leading=11):
             c.setFont(font, size)
             words = (text or "").split()
@@ -326,6 +320,70 @@ def generate_pdf(
                 c.drawString(x, y - used_y, line)
                 used_y += leading
             return used_y
+
+        def measure_wrapped_height(text, max_width, font="Helvetica", size=8, leading=11):
+            c.setFont(font, size)
+            words = (text or "").split()
+            line, lines = "", 0
+            for w in words:
+                test = w if not line else (line + " " + w)
+                if c.stringWidth(test, font, size) <= max_width:
+                    line = test
+                else:
+                    lines += 1
+                    line = w
+            if line:
+                lines += 1
+            return lines * leading
+
+        def measure_hash_height():
+            h = 0
+            heading_h = 0.16 * inch
+            h += heading_h
+            max_text_width = page_w - 2 * margin
+            if sha_price and sha_price != "N/A":
+                h += measure_wrapped_height(f"Price Disclosure: {sha_price}", max_text_width, font="Courier", size=7, leading=9)
+            if sha_pay and sha_pay != "N/A":
+                h += measure_wrapped_height(f"Payment Disclosure: {sha_pay}", max_text_width, font="Courier", size=7, leading=9)
+            h += 0.04 * inch  # small buffer under hashes
+            return h
+
+        def measure_rfc_height():
+            h = 0
+            heading_h = 0.16 * inch
+            h += heading_h
+            max_text_width = page_w - 2 * margin
+
+            def block_height(label, data):
+                if not data:
+                    return 0.14 * inch
+                lines = [
+                    f"{label}:",
+                    f"  Timestamp: {data.get('timestamp', 'N/A')}",
+                    f"  TSA: {data.get('tsa', 'N/A')}",
+                ]
+                token = data.get("token_file")
+                if token:
+                    lines.append(f"  Token: {os.path.basename(token)}")
+                elif data.get("cert_info"):
+                    lines.append(f"  Info: {data['cert_info']}")
+                total = 0
+                for ln in lines:
+                    # label lines are small; measure with Helvetica 8/leading=11
+                    total += measure_wrapped_height(ln, max_text_width, font="Helvetica", size=8, leading=11)
+                return total + 2  # tiny spacer
+
+            h += block_height("Price", rfc_price)
+            h += block_height("Payment", rfc_pay)
+            return h
+
+        # Begin layout
+        y = page_h - margin
+
+        # Title
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(margin, y, "Camping World Compliance Capture Report")
+        y -= title_h
 
         # Metadata
         c.setFont("Helvetica", 8)
@@ -352,12 +410,28 @@ def generate_pdf(
             c.drawString(margin, y, "Used RV selected — no pricing breakdown needed.")
             y -= (gap_small + 0.05 * inch)
 
-        # Images area
-        available_for_imgs = max(0, y - margin - footer_min)
+        # ---- DYNAMIC FOOTER SPACE ----
+        hashes_h = measure_hash_height()
+        rfc_h    = measure_rfc_height()
+        footer_needed = hashes_h + rfc_h + 0.15 * inch  # safety buffer
 
-        if imgs:
+        # Space left for images after guaranteeing the footer
+        available_for_imgs = max(0, (y - margin) - footer_needed)
+
+        if debug_boxes:
+            # Draw reserved footer area guide
+            c.setStrokeGray(0.7)
+            c.setLineWidth(0.5)
+            c.rect(margin, margin, page_w - 2*margin, footer_needed, stroke=1, fill=0)
+            # Draw image area guide
+            c.setStrokeGray(0.85)
+            c.rect(margin, margin + footer_needed, page_w - 2*margin, available_for_imgs, stroke=1, fill=0)
+
+        # ---- IMAGES ----
+        if imgs and available_for_imgs > 0:
             max_img_w = page_w - 2 * margin
             scaled = []
+            # Pre-scale by width to fit the page
             for (label, path, im), (w, h) in zip(imgs, dims):
                 if w == 0 or h == 0:
                     scaled.append((label, path, 0, 0))
@@ -365,28 +439,41 @@ def generate_pdf(
                 s = max_img_w / float(w)
                 scaled.append((label, path, w * s, h * s))
 
-            total_h = sum(h for _, _, _, h in scaled) + (len(scaled) - 1) * gap_img
+            # Now scale down uniformly so total height fits available_for_imgs
+            total_h = sum(h for _, _, _, h in scaled) + (len(scaled) - 1) * gap_img + len(scaled) * 0.13 * inch
             if total_h > available_for_imgs and total_h > 0:
                 shrink = available_for_imgs / total_h
                 scaled = [(label, path, w * shrink, h * shrink) for (label, path, w, h) in scaled]
 
+            # Draw images top-down within the image area
+            # y now points to top of the image area
+            # ensure y doesn't go below margin + footer_needed
+            y_top_images = margin + footer_needed + available_for_imgs
+            y = y_top_images
             for idx, (label, path, dw, dh) in enumerate(scaled):
                 if dw <= 0 or dh <= 0:
                     continue
                 c.setFont("Helvetica", 8)
-                c.drawString(margin, y, label)
+                c.drawString(margin, y - 0.13 * inch, label)
                 y -= 0.13 * inch
                 c.drawImage(path, margin, y - dh, width=dw, height=dh, preserveAspectRatio=True, mask='auto')
                 y -= dh
                 if idx < len(scaled) - 1:
                     y -= gap_img
         else:
+            # No images or no room; jump straight to footer area
+            y = margin + footer_needed + 0.02 * inch
             c.setFont("Helvetica-Oblique", 9)
             c.drawString(margin, y, "No screenshots available for this capture.")
-            y -= 0.25 * inch
+            y += 0.20 * inch  # keep message close to bottom area header
+            # Reset y to top of image area (which is just above footer)
+            y = margin + footer_needed + available_for_imgs
 
-        # Footer: SHA-256
-        y -= 0.20 * inch
+        # ---- FOOTER: SHA-256 ----
+        # Set y to the bottom content start (footer area begins at margin)
+        y = margin + footer_needed
+        # Draw SHA heading slightly above
+        y -= (rfc_h + 0.05 * inch)  # place SHA above RFC block
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "SHA-256 Verification")
         y -= 0.16 * inch
@@ -402,8 +489,8 @@ def generate_pdf(
         if sha_pay and sha_pay != "N/A":
             y = draw_hash("Payment Disclosure", sha_pay, y)
 
-        # Footer: RFC-3161
-        y -= 0.15 * inch
+        # ---- FOOTER: RFC-3161 ----
+        y -= 0.12 * inch
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "RFC-3161 Timestamps")
         y -= 0.16 * inch
@@ -433,7 +520,7 @@ def generate_pdf(
 
         c.showPage()
         c.save()
-        print(f"✓ PDF generated (one page): {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
+        print(f"✓ PDF generated (one page, dynamic footer): {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
         return pdf_path
 
     except Exception as e:
