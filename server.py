@@ -767,7 +767,7 @@ def generate_pdf(
 def generate_pdf(
     stock, location, zip_code, url, utc_time, https_date_value,
     price_path, pay_path, sha_price, sha_pay,
-    rfc_price=None, rfc_pay=None, debug_info=""
+    rfc_price=None, rfc_pay=None, debug_info="", sign_image_path=None  # ← Add this
 ):
     """Single-page LETTER PDF with stacked screenshots and SHA-256 footer."""
     try:
@@ -808,13 +808,9 @@ def generate_pdf(
             tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
 
 
-        # Capture Store Sign image for Page 2 (best-effort; ignore failures)
-        try:
-            sign_image_path = capture_sign_builder_image(stock, tmpdir)
-        except Exception:
-            sign_image_path = None
-            pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
-        c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
+        # PDF output path
+pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
+c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
 
         # Helpers
         def draw_wrapped_line(text, x, y, max_width, font="Helvetica", size=8, leading=11):
