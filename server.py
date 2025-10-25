@@ -1,13 +1,10 @@
 # server.py
-import os, sys, hashlib, datetime, tempfile, traceback, requests, time, base64, io, re
+import os, sys, hashlib, datetime, tempfile, traceback, requests, time, re
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-from rfc3161ng import RemoteTimestamper  # decode import happens inside the function for compat
-from reportlab.lib.pagesizes import letter
+from playwright.sync_api import sync_playwright
 from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle, PageBreak
 from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from PIL import Image as PILImage
 import sqlite3
@@ -17,21 +14,16 @@ import threading
 
 # -------------------- Config --------------------
 
-# Admin password
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "cwadmin2025")  # Change this!
-
-# Persist Playwright downloads
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/ms-playwright")
 
 PORT = int(os.getenv("PORT", "8080"))
 DB_PATH = os.getenv("DB_PATH", "/app/data/captures.db")
 
-# Storage configuration
-STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")  # "persistent" or anything else for tmp
+STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")  # "persistent" or other (temp)
 PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", "/app/data/captures")
-AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))  # 90 days retention
+AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))
 
-# Oregon Camping World locations (alphabetical) with coordinates
 CW_LOCATIONS = {
     "bend": {"name": "Bend", "zip": "97701", "lat": 44.0582, "lon": -121.3153},
     "eugene": {"name": "Eugene", "zip": "97402", "lat": 44.0521, "lon": -123.0868},
@@ -40,7 +32,6 @@ CW_LOCATIONS = {
     "portland": {"name": "Portland", "zip": "97201", "lat": 45.5152, "lon": -122.6784},
 }
 
-# RFC 3161 Timestamp Authority URLs (prefer stable, public TSAs)
 TSA_URLS = [
     "http://timestamp.digicert.com",
     "http://timestamp.sectigo.com",
@@ -57,7 +48,6 @@ app.secret_key = os.getenv("SECRET_KEY", "cw-compliance-secret-key-change-me")  
 
 @contextmanager
 def get_db():
-    """Database connection context manager"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -71,7 +61,6 @@ def get_db():
         conn.close()
 
 def init_db():
-    """Initialize database tables"""
     with get_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS captures (
@@ -100,56 +89,48 @@ def init_db():
 
 init_db()
 
-# -------------------- Automatic Cleanup Scheduler --------------------
+# -------------------- Cleanup Scheduler --------------------
 
 def cleanup_old_files(days_old=90):
-    """Clean up screenshot files and PDFs older than specified days"""
     try:
         cutoff_time = time.time() - (days_old * 24 * 60 * 60)
-        cleaned_count = 0
-        cleaned_size = 0
+        cleaned_count, cleaned_size = 0, 0
 
-        # Clean up temp directories
+        # temp dirs
         temp_base = tempfile.gettempdir()
         for item in os.listdir(temp_base):
             if item.startswith("cw-"):
-                item_path = os.path.join(temp_base, item)
+                p = os.path.join(temp_base, item)
                 try:
-                    if os.path.isdir(item_path):
-                        dir_mtime = os.path.getmtime(item_path)
-                        if dir_mtime < cutoff_time:
-                            for root, dirs, files in os.walk(item_path):
+                    if os.path.isdir(p) and os.path.getmtime(p) < cutoff_time:
+                        for root, _, files in os.walk(p):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                if os.path.exists(fp):
+                                    cleaned_size += os.path.getsize(fp)
+                        import shutil; shutil.rmtree(p)
+                        cleaned_count += 1
+                        print(f"🧹 Cleaned old temp dir: {item}")
+                except Exception as e:
+                    print(f"⚠ Could not clean {p}: {e}")
+
+        # persistent dirs
+        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
+            for item in os.listdir(PERSISTENT_STORAGE_PATH):
+                if item.startswith("cw-"):
+                    p = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    try:
+                        if os.path.isdir(p) and os.path.getmtime(p) < cutoff_time:
+                            for root, _, files in os.walk(p):
                                 for f in files:
                                     fp = os.path.join(root, f)
                                     if os.path.exists(fp):
                                         cleaned_size += os.path.getsize(fp)
-                            import shutil
-                            shutil.rmtree(item_path)
+                            import shutil; shutil.rmtree(p)
                             cleaned_count += 1
-                            print(f"🧹 Cleaned old temp dir: {item}")
-                except Exception as e:
-                    print(f"⚠ Could not clean {item_path}: {e}")
-
-        # Clean up persistent storage
-        if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
-            for item in os.listdir(PERSISTENT_STORAGE_PATH):
-                if item.startswith("cw-"):
-                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
-                    try:
-                        if os.path.isdir(item_path):
-                            dir_mtime = os.path.getmtime(item_path)
-                            if dir_mtime < cutoff_time:
-                                for root, dirs, files in os.walk(item_path):
-                                    for f in files:
-                                        fp = os.path.join(root, f)
-                                        if os.path.exists(fp):
-                                            cleaned_size += os.path.getsize(fp)
-                                import shutil
-                                shutil.rmtree(item_path)
-                                cleaned_count += 1
-                                print(f"🧹 Cleaned old persistent dir: {item}")
+                            print(f"🧹 Cleaned old persistent dir: {item}")
                     except Exception as e:
-                        print(f"⚠ Could not clean {item_path}: {e}")
+                        print(f"⚠ Could not clean {p}: {e}")
 
         cleaned_size_mb = cleaned_size / (1024 * 1024)
         print(f"✓ Cleanup complete: removed {cleaned_count} dirs ({cleaned_size_mb:.2f} MB)")
@@ -159,28 +140,24 @@ def cleanup_old_files(days_old=90):
         return {"cleaned": 0, "size_mb": 0}
 
 def schedule_cleanup():
-    """Run cleanup every 24 hours"""
-    def cleanup_task():
+    def task():
         while True:
             time.sleep(24 * 60 * 60)
             print("🕐 Running scheduled cleanup...")
             try:
                 result = cleanup_old_files(AUTO_CLEANUP_DAYS)
-                print(f"✓ Scheduled cleanup complete: {result['cleaned']} dirs, {result['size_mb']} MB freed")
+                print(f"✓ Scheduled cleanup: {result['cleaned']} dirs, {result['size_mb']} MB")
             except Exception as e:
                 print(f"❌ Scheduled cleanup failed: {e}")
+    t = threading.Thread(target=task, daemon=True)
+    t.start()
+    print(f"✓ Automatic cleanup scheduled (every 24h, retention {AUTO_CLEANUP_DAYS}d)")
 
-    cleanup_thread = threading.Thread(target=cleanup_task, daemon=True)
-    cleanup_thread.start()
-    print(f"✓ Automatic cleanup scheduled (every 24 hours, {AUTO_CLEANUP_DAYS} day retention)")
-
-# Start cleanup scheduler
 schedule_cleanup()
 
-# -------------------- Admin Authentication --------------------
+# -------------------- Auth --------------------
 
 def check_admin_auth():
-    """Check if admin is authenticated via session or basic auth"""
     from flask import session
     if session.get('admin_authenticated'):
         return True
@@ -190,7 +167,6 @@ def check_admin_auth():
     return False
 
 def require_admin_auth(f):
-    """Decorator to require admin authentication"""
     @wraps(f)
     def decorated(*args, **kwargs):
         if check_admin_auth():
@@ -216,22 +192,17 @@ def https_date():
         return None
 
 def get_rfc3161_timestamp(file_path):
-    """Request an RFC 3161 timestamp token for a file.
-       Tries multiple TSAs. Returns dict with timestamp, tsa, and token path, or None."""
+    """Try multiple TSAs; return dict {timestamp, tsa, token_file, cert_info} or None."""
     if not file_path or not os.path.exists(file_path):
         return None
 
     print(f"🕐 Getting RFC 3161 timestamp for {os.path.basename(file_path)}...")
 
-    # Read full file bytes (preferred by most TSAs)
     with open(file_path, "rb") as f:
         file_bytes = f.read()
-
-    # Precompute SHA-256 for hash-only fallback
     digest = hashlib.sha256(file_bytes).digest()
 
     try:
-        # Import here for compatibility with different rfc3161ng versions
         from rfc3161ng import RemoteTimestamper, decode_timestamp_response
     except Exception as e:
         print(f"✗ rfc3161ng not available: {e}")
@@ -243,24 +214,23 @@ def get_rfc3161_timestamp(file_path):
             rt = RemoteTimestamper(tsa_url, hashname="sha256")
 
             tsr = None
-            # 1) Try sending file bytes (with certreq if supported)
+            # Prefer sending file bytes
             try:
                 try:
-                    tsr = rt.timestamp(data=file_bytes, certreq=True)   # newer rfc3161ng
+                    tsr = rt.timestamp(data=file_bytes, certreq=True)
                 except TypeError:
-                    tsr = rt.timestamp(data=file_bytes)                 # older rfc3161ng
-            except Exception as inner_e:
-                print(f"    data= failed ({inner_e}); retrying with data_hash...")
+                    tsr = rt.timestamp(data=file_bytes)
+            except Exception as e1:
+                print(f"    data= failed ({e1}); retrying with data_hash...")
 
-            # 2) Fallback: pass the digest explicitly
             if not tsr:
                 try:
                     try:
                         tsr = rt.timestamp(data_hash=digest, certreq=True)
                     except TypeError:
                         tsr = rt.timestamp(data_hash=digest)
-                except Exception as inner2_e:
-                    print(f"    data_hash= failed ({inner2_e})")
+                except Exception as e2:
+                    print(f"    data_hash= failed ({e2})")
 
             if not tsr:
                 print("    ✗ TSA returned no token")
@@ -281,7 +251,6 @@ def get_rfc3161_timestamp(file_path):
                 "cert_info": f"Token saved: {os.path.basename(token_path)}",
                 "token_file": token_path,
             }
-
         except Exception as e:
             print(f"  ✗ TSA {tsa_url} failed: {e}")
             continue
@@ -289,24 +258,17 @@ def get_rfc3161_timestamp(file_path):
     print(f"  ✗ All TSAs failed for {os.path.basename(file_path)}")
     return None
 
-# -------------------- PDF (One-page) --------------------
+# -------------------- PDF (single page) --------------------
 
 def generate_pdf(
     stock, location, zip_code, url, utc_time, https_date_value,
     price_path, pay_path, sha_price, sha_pay,
     rfc_price, rfc_pay, debug_info
 ):
-    """
-    Generate a single-page LETTER PDF.
-    - Title + metadata at the top (compact)
-    - 1 or 2 screenshots scaled to fit the remaining page height (stacked)
-    - SHA256 + RFC3161 info at the bottom
-    - If used RV (inferred from debug_info) and price is absent: show the 'Used RV selected...' note
-    """
+    """Single-page LETTER PDF with stacked screenshots and RFC-3161 footer."""
     try:
         from reportlab.pdfgen import canvas as pdfcanvas
         from reportlab.lib.pagesizes import letter
-        from reportlab.lib.units import inch
 
         page_w, page_h = letter
         margin = 0.35 * inch
@@ -314,18 +276,13 @@ def generate_pdf(
         gap_img   = 0.15 * inch
         title_h   = 0.25 * inch
         meta_line_h = 0.16 * inch
-        footer_min = 0.90 * inch  # reserved for hashes + RFC info
+        footer_min = 0.90 * inch  # reserved space for hashes + timestamps
 
-        # Paths present?
         price_ok = bool(price_path and os.path.exists(price_path))
         pay_ok   = bool(pay_path and os.path.exists(pay_path))
+        is_used  = bool(debug_info and "Unit type: Used" in debug_info)
 
-        # Used unit note?
-        is_used = bool(debug_info and "Unit type: Used" in debug_info)
-
-        # Open images
-        imgs = []
-        dims = []
+        imgs, dims = [], []
         if price_ok:
             im1 = PILImage.open(price_path)
             imgs.append(("Price Disclosure", price_path, im1))
@@ -335,7 +292,6 @@ def generate_pdf(
             imgs.append(("Payment Disclosure", pay_path, im2))
             dims.append((im2.width, im2.height))
 
-        # Output path (prefer an existing image dir)
         if price_ok:
             tmpdir = os.path.dirname(price_path)
         elif pay_ok:
@@ -353,23 +309,11 @@ def generate_pdf(
         c.drawString(margin, y, "Camping World Compliance Capture Report")
         y -= title_h
 
-        # Metadata
-        c.setFont("Helvetica", 8)
-        meta_lines_list = [
-            f"Stock: {stock}",
-            f"Location: {location} (ZIP: {zip_code})",
-            f"URL: {url or 'N/A'}",
-            f"Capture Time (UTC): {utc_time}",
-            f"HTTPS Date: {https_date_value or 'N/A'}",
-        ]
-
-        max_text_width = page_w - 2 * margin
-
+        # Wrap helper
         def draw_wrapped_line(text, x, y, max_width, font="Helvetica", size=8, leading=11):
             c.setFont(font, size)
             words = (text or "").split()
-            line = ""
-            used_y = 0
+            line, used_y = "", 0
             for w in words:
                 test = w if not line else (line + " " + w)
                 if c.stringWidth(test, font, size) <= max_width:
@@ -383,7 +327,17 @@ def generate_pdf(
                 used_y += leading
             return used_y
 
-        for line in meta_lines_list:
+        # Metadata
+        c.setFont("Helvetica", 8)
+        max_text_width = page_w - 2 * margin
+        meta_lines = [
+            f"Stock: {stock}",
+            f"Location: {location} (ZIP: {zip_code})",
+            f"URL: {url or 'N/A'}",
+            f"Capture Time (UTC): {utc_time}",
+            f"HTTPS Date: {https_date_value or 'N/A'}",
+        ]
+        for line in meta_lines:
             if line.startswith("URL: "):
                 used_h = draw_wrapped_line(line, margin, y, max_text_width, size=8, leading=11)
                 y -= used_h
@@ -393,16 +347,14 @@ def generate_pdf(
 
         y -= gap_small
 
-        # Used banner
         if is_used and not price_ok:
             c.setFont("Helvetica-Bold", 9)
             c.drawString(margin, y, "Used RV selected — no pricing breakdown needed.")
             y -= (gap_small + 0.05 * inch)
 
-        # Available height for images
+        # Images area
         available_for_imgs = max(0, y - margin - footer_min)
 
-        # Scale & draw images (stacked)
         if imgs:
             max_img_w = page_w - 2 * margin
             scaled = []
@@ -414,7 +366,6 @@ def generate_pdf(
                 scaled.append((label, path, w * s, h * s))
 
             total_h = sum(h for _, _, _, h in scaled) + (len(scaled) - 1) * gap_img
-
             if total_h > available_for_imgs and total_h > 0:
                 shrink = available_for_imgs / total_h
                 scaled = [(label, path, w * shrink, h * shrink) for (label, path, w, h) in scaled]
@@ -451,7 +402,7 @@ def generate_pdf(
         if sha_pay and sha_pay != "N/A":
             y = draw_hash("Payment Disclosure", sha_pay, y)
 
-        # Footer: RFC 3161
+        # Footer: RFC-3161
         y -= 0.15 * inch
         c.setFont("Helvetica-Bold", 10)
         c.drawString(margin, y, "RFC-3161 Timestamps")
@@ -480,7 +431,7 @@ def generate_pdf(
         y = draw_rfc("Price", rfc_price, y)
         y = draw_rfc("Payment", rfc_pay, y)
 
-        c.showPage()  # single page
+        c.showPage()
         c.save()
         print(f"✓ PDF generated (one page): {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
         return pdf_path
@@ -493,15 +444,12 @@ def generate_pdf(
 # -------------------- Tooltip Helper --------------------
 
 def find_and_trigger_tooltip(page, label_text, tooltip_name):
-    """Enhanced tooltip triggering with multiple fallback strategies."""
     debug = []
     debug.append(f"Attempting to trigger {tooltip_name} tooltip for label: '{label_text}'")
-
     try:
         page.wait_for_timeout(1500)
         all_labels = page.locator(f"text={label_text}").all()
         debug.append(f"Found {len(all_labels)} instances of '{label_text}'")
-
         if len(all_labels) == 0:
             debug.append("❌ No instances found - element may not exist on page")
             return False, "\n".join(debug)
@@ -509,8 +457,7 @@ def find_and_trigger_tooltip(page, label_text, tooltip_name):
         success = False
         for idx, label in enumerate(all_labels):
             try:
-                is_visible = label.is_visible(timeout=1000)
-                if not is_visible:
+                if not label.is_visible(timeout=1000):
                     debug.append(f"  Instance {idx}: not visible, skipping")
                     continue
 
@@ -526,7 +473,6 @@ def find_and_trigger_tooltip(page, label_text, tooltip_name):
                     for svg_idx, svg_icon in enumerate(svg_icons):
                         try:
                             if svg_icon.is_visible(timeout=500):
-                                debug.append(f"    Attempting to click SVG icon {svg_idx}...")
                                 svg_icon.click(timeout=2000, force=True)
                                 page.wait_for_timeout(1000)
                                 icon_found = True
@@ -540,7 +486,6 @@ def find_and_trigger_tooltip(page, label_text, tooltip_name):
 
                 if not icon_found:
                     try:
-                        debug.append(f"    Trying data-testid selectors...")
                         info_selectors = [
                             '[data-testid*="info"]',
                             '[data-testid*="Info"]',
@@ -622,8 +567,8 @@ def find_and_trigger_tooltip(page, label_text, tooltip_name):
                             if (svg) {{
                                 svg.scrollIntoView({{behavior: 'smooth', block: 'center'}});
                                 setTimeout(() => {{
-                                    ['mouseenter', 'mouseover', 'mousemove', 'click'].forEach(eventType => {{
-                                        svg.dispatchEvent(new MouseEvent(eventType, {{ bubbles: true, cancelable: true, view: window }}));
+                                    ['mouseenter','mouseover','mousemove','click'].forEach(t => {{
+                                        svg.dispatchEvent(new MouseEvent(t, {{bubbles:true,cancelable:true,view:window}}));
                                     }});
                                 }}, 500);
                                 return true;
@@ -676,7 +621,6 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
     all_debug.append(f"Location: {location_name} (ZIP: {zip_code})")
     all_debug.append(f"Coordinates: {latitude}, {longitude}")
 
-    # Identify if unit is used (contains letters)
     is_used = bool(re.search(r"[a-zA-Z]", stock))
     all_debug.append(f"Unit type: {'Used' if is_used else 'New'}")
 
@@ -729,11 +673,9 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
             except Exception as e:
                 all_debug.append(f"⚠ ZIP injection issue: {e}")
 
-            # Capture final URL after navigation/reloads
             final_url = page.url
             all_debug.append(f"✓ Final URL captured: {final_url}")
 
-            # Hide overlays
             page.add_style_tag(content="""
                 [id*="intercom"], [class*="livechat"], [class*="chat"],
                 .cf-overlay, .cf-powered-by, .cf-cta,
@@ -747,7 +689,6 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
             all_debug.append("✓ Overlay-hiding CSS injected")
             page.wait_for_timeout(2000)
 
-            # Scroll to pricing area
             try:
                 page.evaluate("""
                     window.scrollTo({
@@ -763,14 +704,13 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
             # NEW units: capture "Total Price" tooltip
             if not is_used:
                 all_debug.append("\n--- Capturing Price Tooltip (New Unit) ---")
-                success, debug_info = find_and_trigger_tooltip(page, "Total Price", "price")
-                all_debug.append(debug_info)
+                success, dbg = find_and_trigger_tooltip(page, "Total Price", "price")
+                all_debug.append(dbg)
                 if success:
                     try:
                         page.screenshot(path=price_png, full_page=True)
                         size = os.path.getsize(price_png)
                         all_debug.append(f"✓ Price screenshot saved: {size} bytes")
-                        print(f"✓ Price screenshot: {size} bytes")
                         price_png_path = price_png
                     except Exception as e:
                         all_debug.append(f"❌ Price screenshot failed: {e}")
@@ -779,21 +719,20 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
 
             page.wait_for_timeout(1000)
 
-            # Capture "Est. Payment" tooltip for both new/used
+            # Payment tooltip (both new/used)
             all_debug.append("\n--- Capturing Payment Tooltip ---")
-            success, debug_info = find_and_trigger_tooltip(page, "Est. Payment", "payment")
-            all_debug.append(debug_info)
+            success, dbg = find_and_trigger_tooltip(page, "Est. Payment", "payment")
+            all_debug.append(dbg)
             if success:
                 try:
                     page.screenshot(path=pay_png, full_page=True)
                     size = os.path.getsize(pay_png)
                     all_debug.append(f"✓ Payment screenshot saved: {size} bytes")
-                    print(f"✓ Payment screenshot: {size} bytes")
                     pay_png_path = pay_png
                 except Exception as e:
                     all_debug.append(f"❌ Payment screenshot failed: {e}")
 
-            # Not found / fallback
+            # Not found fallback
             not_found = False
             if (is_used and pay_png_path is None) or (not is_used and price_png_path is None and pay_png_path is None):
                 all_debug.append("\n--- Checking for 'No Matches Found' (Capture Failed) ---")
@@ -811,7 +750,7 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
                         page.screenshot(path=not_found_png, full_page=True)
                         size = os.path.getsize(not_found_png)
                         all_debug.append(f"✓ 'Not Found' screenshot saved: {size} bytes")
-                        price_png_path = not_found_png  # use this as a single screenshot
+                        price_png_path = not_found_png
                         not_found = True
                     else:
                         all_debug.append("⚠ No 'Not Found' text detected.")
@@ -830,8 +769,7 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
         print(f"❌ Critical error in do_capture: {e}")
         traceback.print_exc()
 
-    debug_output = "\n".join(all_debug)
-    return price_png_path, pay_png_path, final_url, debug_output
+    return price_png_path, pay_png_path, final_url, "\n".join(all_debug)
 
 # -------------------- Routes --------------------
 
@@ -869,31 +807,29 @@ def admin_storage():
                 else:
                     files_missing += 1
 
-        # Temp storage stats
         temp_size = 0
         temp_dirs = 0
         temp_base = tempfile.gettempdir()
         for item in os.listdir(temp_base):
             if item.startswith("cw-"):
-                item_path = os.path.join(temp_base, item)
-                if os.path.isdir(item_path):
+                ip = os.path.join(temp_base, item)
+                if os.path.isdir(ip):
                     temp_dirs += 1
-                    for root, dirs, files in os.walk(item_path):
+                    for root, _, files in os.walk(ip):
                         for f in files:
                             fp = os.path.join(root, f)
                             if os.path.exists(fp):
                                 temp_size += os.path.getsize(fp)
 
-        # Persistent storage stats
         persistent_size = 0
         persistent_dirs = 0
         if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
             for item in os.listdir(PERSISTENT_STORAGE_PATH):
                 if item.startswith("cw-"):
-                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
-                    if os.path.isdir(item_path):
+                    ip = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    if os.path.isdir(ip):
                         persistent_dirs += 1
-                        for root, dirs, files in os.walk(item_path):
+                        for root, _, files in os.walk(ip):
                             for f in files:
                                 fp = os.path.join(root, f)
                                 if os.path.exists(fp):
@@ -903,7 +839,6 @@ def admin_storage():
         persistent_size_mb = persistent_size / (1024 * 1024)
         total_size_mb = temp_size_mb + persistent_size_mb
 
-        # Estimates
         estimated_max_captures = 90 * 3
         estimated_max_size_mb = estimated_max_captures * 5
 
@@ -970,9 +905,9 @@ def admin_dashboard():
         if STORAGE_MODE == "persistent" and os.path.exists(PERSISTENT_STORAGE_PATH):
             for item in os.listdir(PERSISTENT_STORAGE_PATH):
                 if item.startswith("cw-"):
-                    item_path = os.path.join(PERSISTENT_STORAGE_PATH, item)
-                    if os.path.isdir(item_path):
-                        for root, dirs, files in os.walk(item_path):
+                    ip = os.path.join(PERSISTENT_STORAGE_PATH, item)
+                    if os.path.isdir(ip):
+                        for root, _, files in os.walk(ip):
                             for f in files:
                                 fp = os.path.join(root, f)
                                 if os.path.exists(fp):
@@ -1014,8 +949,6 @@ def admin_dashboard():
     .btn:hover { background: #1d4ed8; }
     .btn-secondary { background: #6b7280; }
     .btn-secondary:hover { background: #4b5563; }
-    .btn-danger { background: #dc2626; }
-    .btn-danger:hover { background: #b91c1c; }
     .actions { display: flex; gap: 12px; margin-top: 16px; }
     .back-link { color: #2563eb; text-decoration: none; font-weight: 600; font-size: 14px; }
     .back-link:hover { text-decoration: underline; }
@@ -1039,7 +972,6 @@ def admin_dashboard():
         <div class="value">{{total_captures}}</div>
         <div class="subvalue">All time</div>
       </div>
-      
       <div class="stat-card">
         <h3>Storage Used</h3>
         <div class="value">{{total_size_mb|round(2)}} MB</div>
@@ -1048,13 +980,11 @@ def admin_dashboard():
           <div class="progress-fill" style="width: {{usage_percent if usage_percent < 100 else 100}}%"></div>
         </div>
       </div>
-      
       <div class="stat-card">
         <h3>Storage Mode</h3>
         <div class="value" style="font-size: 20px;">{{storage_mode.upper()}}</div>
         <div class="subvalue">{{cleanup_days}} day retention</div>
       </div>
-      
       <div class="stat-card">
         <h3>Estimated Max</h3>
         <div class="value">{{estimated_max_mb|round(0)|int}} MB</div>
@@ -1066,13 +996,7 @@ def admin_dashboard():
       <h2>📊 Captures by Location</h2>
       {% if location_stats %}
         <table>
-          <thead>
-            <tr>
-              <th>Location</th>
-              <th>Capture Count</th>
-              <th>Percentage</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Location</th><th>Capture Count</th><th>Percentage</th></tr></thead>
           <tbody>
             {% for loc in location_stats %}
             <tr>
@@ -1092,18 +1016,10 @@ def admin_dashboard():
       <h2>📅 Daily Activity (Last 30 Days)</h2>
       {% if daily_stats %}
         <table>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Captures</th>
-            </tr>
-          </thead>
+          <thead><tr><th>Date</th><th>Captures</th></tr></thead>
           <tbody>
             {% for day in daily_stats[:10] %}
-            <tr>
-              <td>{{day.date}}</td>
-              <td>{{day.count}}</td>
-            </tr>
+            <tr><td>{{day.date}}</td><td>{{day.count}}</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -1116,15 +1032,7 @@ def admin_dashboard():
       <h2>🕐 Recent Captures</h2>
       {% if recent_captures %}
         <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Stock</th>
-              <th>Location</th>
-              <th>Capture Time</th>
-              <th>Action</th>
-            </tr>
-          </thead>
+          <thead><tr><th>ID</th><th>Stock</th><th>Location</th><th>Capture Time</th><th>Action</th></tr></thead>
           <tbody>
             {% for capture in recent_captures[:10] %}
             <tr>
@@ -1133,7 +1041,7 @@ def admin_dashboard():
               <td><span class="location-badge">{{capture.location}}</span></td>
               <td>{{capture.capture_utc}}</td>
               <td>
-                <a href="/view/{{capture.id}}" class="btn" style="padding: 6px 12px; font-size: 12px;">View PDF</a>
+                <a href="/view/{{capture.id}}?force=1" class="btn" style="padding: 6px 12px; font-size: 12px;">Force PDF</a>
               </td>
             </tr>
             {% endfor %}
@@ -1146,7 +1054,6 @@ def admin_dashboard():
 
     <div class="section">
       <h2>🧹 Maintenance Actions</h2>
-      <p style="color: #6b7280; margin-bottom: 16px;">Manage storage and cleanup operations</p>
       <div class="actions">
         <a href="/admin/cleanup?days={{cleanup_days}}" class="btn btn-secondary">Run Cleanup Now</a>
         <a href="/admin/storage" class="btn btn-secondary" target="_blank">View Storage API</a>
@@ -1196,9 +1103,9 @@ def tsa_diagnostics():
                 rt = RemoteTimestamper(url, hashname="sha256")
                 tsr = None
                 try:
-                    tsr = rt.timestamp(data=b"diag", certreq=True)  # newer rfc3161ng
+                    tsr = rt.timestamp(data=b"diag", certreq=True)
                 except TypeError:
-                    tsr = rt.timestamp(data=b"diag")                # older rfc3161ng
+                    tsr = rt.timestamp(data=b"diag")
                 row["ok"] = bool(tsr)
                 row["notes"] = "token received" if tsr else "no token"
             except Exception as e:
@@ -1208,6 +1115,21 @@ def tsa_diagnostics():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"results": results})
+
+@app.get("/admin/capture/<int:capture_id>")
+@require_admin_auth
+def admin_capture_details(capture_id):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM captures WHERE id = ?", (capture_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "capture not found"}), 404
+        details = dict(row)
+        price_path = details.get("price_screenshot_path")
+        pay_path   = details.get("payment_screenshot_path")
+        details["price_file_exists"] = bool(price_path and os.path.exists(price_path))
+        details["payment_file_exists"] = bool(pay_path and os.path.exists(pay_path))
+        details["pdf_exists"] = bool(details.get("pdf_path") and os.path.exists(details["pdf_path"]))
+        return jsonify(details)
 
 @app.get("/admin/backfill-tsa/<int:capture_id>")
 @require_admin_auth
@@ -1230,7 +1152,6 @@ def admin_backfill_tsa(capture_id):
             pay_tsa   = row['payment_tsa']
             updates = {}
 
-            # Timestamp price if needed
             rfc_price = None
             if price_path and not price_tsa:
                 try:
@@ -1241,7 +1162,6 @@ def admin_backfill_tsa(capture_id):
                 except Exception as e:
                     print(f"⚠ backfill price TSA failed: {e}")
 
-            # Timestamp payment if needed
             rfc_pay = None
             if pay_path and not pay_tsa:
                 try:
@@ -1252,27 +1172,16 @@ def admin_backfill_tsa(capture_id):
                 except Exception as e:
                     print(f"⚠ backfill payment TSA failed: {e}")
 
-            # If nothing changed, still reconstruct RFC dicts from DB for regeneration
             if not rfc_price and row['price_tsa']:
-                rfc_price = {
-                    "tsa": row['price_tsa'],
-                    "timestamp": row['price_timestamp'],
-                    "cert_info": None
-                }
+                rfc_price = {"tsa": row['price_tsa'], "timestamp": row['price_timestamp'], "cert_info": None}
             if not rfc_pay and row['payment_tsa']:
-                rfc_pay = {
-                    "tsa": row['payment_tsa'],
-                    "timestamp": row['payment_timestamp'],
-                    "cert_info": None
-                }
+                rfc_pay = {"tsa": row['payment_tsa'], "timestamp": row['payment_timestamp'], "cert_info": None}
 
-            # Write DB updates if any
             if updates:
                 set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
                 vals = list(updates.values()) + [capture_id]
                 conn.execute(f"UPDATE captures SET {set_clause} WHERE id = ?", vals)
 
-            # Regenerate PDF with the (possibly) new timestamps
             pdf_path = generate_pdf(
                 stock=row['stock'],
                 location=row['location'],
@@ -1307,7 +1216,6 @@ def admin_backfill_tsa(capture_id):
 
 @app.get("/history")
 def history():
-    # Filters
     location_filter = request.args.get("location", "").strip()
     stock_filter = request.args.get("stock", "").strip()
     sort_by = request.args.get("sort", "date_desc")
@@ -1315,16 +1223,13 @@ def history():
     with get_db() as conn:
         query = "SELECT id, stock, location, capture_utc, price_sha256, payment_sha256 FROM captures WHERE 1=1"
         params = []
-
         if location_filter and location_filter.lower() != "all":
             location_name = location_filter.capitalize()
             query += " AND location = ?"
             params.append(location_name)
-
         if stock_filter:
             query += " AND stock LIKE ?"
             params.append(f"%{stock_filter}%")
-
         if sort_by == "date_asc":
             query += " ORDER BY created_at ASC"
         elif sort_by == "stock_asc":
@@ -1335,7 +1240,6 @@ def history():
             query += " ORDER BY location ASC, created_at DESC"
         else:
             query += " ORDER BY created_at DESC"
-
         query += " LIMIT 100"
         captures = conn.execute(query, params).fetchall()
 
@@ -1443,7 +1347,11 @@ def history():
         <td>{{capture.capture_utc}}</td>
         <td><code style="font-size:10px">{{(capture.price_sha256 or '')[:16]}}...</code></td>
         <td><code style="font-size:10px">{{(capture.payment_sha256 or '')[:16]}}...</code></td>
-        <td><a href="/view/{{capture.id}}" class="view-btn">View PDF</a></td>
+        <td>
+          <a href="/view/{{capture.id}}?force=1" class="view-btn">Force PDF</a>
+          &nbsp;|&nbsp;
+          <a href="/view/{{capture.id}}?force=1&restamp=1" class="view-btn">Re-stamp + PDF</a>
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -1463,13 +1371,16 @@ def history():
 
 @app.get("/view/<int:capture_id>")
 def view_capture(capture_id):
+    force = request.args.get("force") == "1"
+    restamp = request.args.get("restamp") == "1"
+
     with get_db() as conn:
         capture = conn.execute("SELECT * FROM captures WHERE id = ?", (capture_id,)).fetchone()
     if not capture:
         return Response("Capture not found", status=404)
 
-    # If we stored a PDF path and it exists, serve it
-    if capture['pdf_path'] and os.path.exists(capture['pdf_path']):
+    # Serve cached PDF if present and not forcing
+    if capture['pdf_path'] and os.path.exists(capture['pdf_path']) and not force:
         return send_file(
             capture['pdf_path'],
             mimetype="application/pdf",
@@ -1477,44 +1388,70 @@ def view_capture(capture_id):
             download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf"
         )
 
-    # Else, try to regenerate
+    # Rebuild (optionally re-stamp)
     price_path = capture['price_screenshot_path']
-    pay_path = capture['payment_screenshot_path']
+    pay_path   = capture['payment_screenshot_path']
     price_path = price_path if (price_path and os.path.exists(price_path)) else None
     pay_path   = pay_path   if (pay_path and os.path.exists(pay_path))   else None
 
-    if (price_path or pay_path):
-        print(f"📄 Regenerating PDF for capture {capture_id}")
+    rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None} if capture['price_tsa'] else None
+    rfc_pay   = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None} if capture['payment_tsa'] else None
 
-        rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None} if capture['price_tsa'] else None
-        rfc_pay   = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None} if capture['payment_tsa'] else None
-
+    if restamp:
+        updated = {}
         try:
-            pdf_path = generate_pdf(
-                stock=capture['stock'],
-                location=capture['location'],
-                zip_code=capture['zip_code'],
-                url=capture['url'],
-                utc_time=capture['capture_utc'],
-                https_date_value=capture['https_date'],
-                price_path=price_path,
-                pay_path=pay_path,
-                sha_price=capture['price_sha256'] or "N/A",
-                sha_pay=capture['payment_sha256'] or "N/A",
-                rfc_price=rfc_price,
-                rfc_pay=rfc_pay,
-                debug_info=capture['debug_info']
-            )
-            if pdf_path and os.path.exists(pdf_path):
-                return send_file(
-                    pdf_path,
-                    mimetype="application/pdf",
-                    as_attachment=True,
-                    download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf"
-                )
+            if price_path:
+                new_price = get_rfc3161_timestamp(price_path)
+                if new_price:
+                    rfc_price = new_price
+                    updated["price_tsa"] = new_price["tsa"]
+                    updated["price_timestamp"] = new_price["timestamp"]
         except Exception as e:
-            print(f"❌ PDF regeneration failed: {e}")
-            traceback.print_exc()
+            print(f"⚠ restamp price failed: {e}")
+        try:
+            if pay_path:
+                new_pay = get_rfc3161_timestamp(pay_path)
+                if new_pay:
+                    rfc_pay = new_pay
+                    updated["payment_tsa"] = new_pay["tsa"]
+                    updated["payment_timestamp"] = new_pay["timestamp"]
+        except Exception as e:
+            print(f"⚠ restamp payment failed: {e}")
+
+        if updated:
+            with get_db() as conn:
+                set_clause = ", ".join([f"{k} = ?" for k in updated.keys()])
+                vals = list(updated.values()) + [capture_id]
+                conn.execute(f"UPDATE captures SET {set_clause} WHERE id = ?", vals)
+
+    try:
+        pdf_path = generate_pdf(
+            stock=capture['stock'],
+            location=capture['location'],
+            zip_code=capture['zip_code'],
+            url=capture['url'],
+            utc_time=capture['capture_utc'],
+            https_date_value=capture['https_date'],
+            price_path=price_path,
+            pay_path=pay_path,
+            sha_price=capture['price_sha256'] or "N/A",
+            sha_pay=capture['payment_sha256'] or "N/A",
+            rfc_price=rfc_price,
+            rfc_pay=rfc_pay,
+            debug_info=capture['debug_info']
+        )
+        if pdf_path and os.path.exists(pdf_path):
+            with get_db() as conn:
+                conn.execute("UPDATE captures SET pdf_path = ? WHERE id = ?", (pdf_path, capture_id))
+            return send_file(
+                pdf_path,
+                mimetype="application/pdf",
+                as_attachment=True,
+                download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf"
+            )
+    except Exception as e:
+        print(f"❌ PDF regeneration failed: {e}")
+        traceback.print_exc()
 
     return Response("PDF and screenshots no longer available. Data has been cleaned up.", status=404)
 
@@ -1529,11 +1466,11 @@ def capture():
         if location not in CW_LOCATIONS:
             return Response("Invalid location", status=400)
 
-        loc_info = CW_LOCATIONS[location]
-        zip_code = loc_info["zip"]
-        location_name = loc_info["name"]
-        latitude = loc_info["lat"]
-        longitude = loc_info["lon"]
+        loc = CW_LOCATIONS[location]
+        zip_code = loc["zip"]
+        location_name = loc["name"]
+        latitude = loc["lat"]
+        longitude = loc["lon"]
 
         price_path, pay_path, final_url, debug_info = do_capture(stock, zip_code, location_name, latitude, longitude)
 
@@ -1557,7 +1494,6 @@ def capture():
         except Exception as e:
             print(f"⚠ RFC 3161 timestamp failed for payment: {e}")
 
-        # Optional: add quick flags to debug_info (helps on error page)
         if rfc_price:
             debug_info += f"\nRFC3161_PRICE_OK={rfc_price.get('timestamp')}"
         else:
