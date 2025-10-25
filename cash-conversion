@@ -1,0 +1,1057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>RV Finance Edge: Smart RV Financing Calculator</title>
+  <meta name="description" content="Compare financing vs. paying cash. See how investing your cash and writing off RV loan interest can work in your favor." />
+  <style>
+    /* ============== Base (mobile-first) ============== */
+    :root{
+      --card:#ffffff;
+      --ink:#1d1d1f;
+      --muted:#6e6e73;
+      --line:#e5e5ea;
+      --brand:#0071e3;
+      --brand-d:#005bb5;
+      --green-50:#ecfdf5;
+      --green-600:#16a34a;
+      --green-800:#065f46;
+      --warn-50:#fff7ed;
+      --warn-600:#ea580c;
+      --warn-800:#9a3412;
+      --error-50:#fef2f2;
+      --error-600:#dc2626;
+      --error-800:#991b1b;
+      --success-50:#f0fdf4;
+      --success-600:#16a34a;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+      color:var(--ink);
+      background:#f4f6f8 url('pnw_background.gif') no-repeat center/cover;
+      text-align:center;
+      line-height:1.6;
+    }
+    .container{
+      width:min(100%, 960px);
+      margin:clamp(12px,4vw,48px) auto;
+      padding:clamp(12px,3.5vw,24px);
+      background: linear-gradient(135deg, var(--card) 0%, #fafafa 100%);
+      border-radius:12px;
+      box-shadow:0 4px 12px rgba(0,0,0,.12);
+    }
+    h1{margin:0 0 .35rem;font-size:clamp(1.35rem,2.6vw,2.25rem);font-weight:700;line-height:1.2}
+    p.lead{margin:.25rem 0 1rem;color:var(--muted);font-size:clamp(.95rem,1.7vw,1.05rem)}
+
+    /* Skip Link */
+    .skip-link {
+      position: absolute; top: -40px; left: 6px; background: var(--brand); color: white;
+      padding: 8px; text-decoration: none; border-radius: 4px; z-index: 1000;
+    }
+    .skip-link:focus { top: 6px; }
+
+    /* Inputs */
+    .form-grid{display:grid;grid-template-columns:1fr;gap:16px;text-align:left}
+    .form-group{display:flex;flex-direction:column;position:relative}
+    .form-group label{font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:4px;}
+    .required::after{content:"*";color:var(--error-600);margin-left:2px;}
+    input,select{
+      width:100%;padding:14px;border-radius:8px;border:2px solid #d2d2d7;font-size:1rem;background:#fff;
+      transition:border-color 0.2s, box-shadow 0.2s;min-height:48px;
+    }
+    input:focus,select:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(0,113,227,.1);}
+    input:user-invalid:not(:focus){border-color:var(--error-600);background-color:var(--error-50);}
+    input:user-valid:not(:focus){border-color:var(--success-600);background-color:var(--success-50);}
+    .note-inline{font-size:.9rem;color:var(--muted);margin-top:6px;line-height:1.4;}
+    .error-message{
+      display:none;color:var(--error-800);font-size:.9rem;margin-top:4px;padding:8px 12px;background:var(--error-50);
+      border-radius:6px;border-left:6px solid var(--error-600);
+    }
+    .error-message.show{display:block}
+    .btns{display:grid;grid-template-columns:1fr;gap:12px;margin-top:20px}
+    button{
+      padding:14px 20px;background:var(--brand);color:#fff;font-weight:700;border:none;border-radius:8px;cursor:pointer;
+      transition:background .2s, transform .1s, box-shadow .2s;width:100%;min-height:48px;font-size:1rem;
+      box-shadow: 0 2px 4px rgba(0, 113, 227, 0.2);
+      will-change: transform, background-color;
+    }
+    button:hover:not(:disabled){
+      background:var(--brand-d);
+      transform:translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0, 113, 227, 0.3);
+    }
+    button:active{transform:translateY(0)}
+    button:disabled{background:#d1d5db;cursor:not-allowed;transform:none;box-shadow:none;}
+    button:focus{outline:3px solid rgba(0,113,227,.4);outline-offset:2px;}
+    button.secondary { background:#e9ecef;color:var(--ink);box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    button.secondary:hover:not(:disabled) { background:#d1d5db;box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
+
+    /* Loading button shimmer */
+    .loading{position:relative;overflow:hidden}
+    .loading::after{
+      content:"";position:absolute;top:0;left:-100%;width:100%;height:100%;
+      background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);
+      animation:loading 1.5s infinite;
+      will-change: transform;
+    }
+    @keyframes loading{to{left:100%}}
+
+    /* Break-even tooltip (optional icon hidden unless needed) */
+    .roi-tooltip-container { position: relative; display: inline-block; }
+    .roi-tooltip {
+      display:none;position:absolute;z-index:1000;bottom:125%;left:50%;transform:translateX(-50%);
+      background-color:var(--warn-50);color:var(--warn-600);text-align:left;padding:12px 16px;border-radius:8px;
+      font-size:0.9rem;font-weight:500;line-height:1.4;box-shadow:0 4px 12px rgba(0,0,0,0.15);border:1px solid var(--warn-600);
+      white-space:normal;max-width:350px;width:max-content;min-width:280px;
+    }
+    .roi-tooltip::after{
+      content:"";position:absolute;top:100%;left:50%;transform:translateX(-50%);border:6px solid transparent;border-top-color:var(--warn-600);
+    }
+    .roi-tooltip.show { display:block; }
+    .roi-info-icon{
+      background:var(--warn-600);color:#fff;border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;
+      font-size:12px;font-weight:bold;cursor:pointer;margin-left:8px;transition:all 0.2s;border:none;vertical-align:middle;
+    }
+    .roi-info-icon:hover { background:var(--warn-800); transform: scale(1.1); }
+    .roi-info-icon:focus { outline:2px solid var(--warn-600); outline-offset:2px; }
+    .roi-info-icon.hidden { display:none; }
+
+    /* Enhanced guidance alert with icon */
+    .warn{
+      display:none;margin-top:12px;padding:12px 16px;background:var(--warn-50);color:var(--warn-600);
+      border-left:6px solid var(--warn-600);border-radius:8px;font-size:.95rem;position:relative;
+    }
+    .warn::before {
+      content: "⚠";
+      display: inline-block;
+      margin-right: 8px;
+      color: var(--warn-600);
+      font-weight: bold;
+    }
+    .warn small{display:block;opacity:.9;margin-top:6px}
+
+    /* Enhanced ROI callout with success icon */
+    .callout{
+      display:none;text-align:left;margin:16px 0 0;padding:16px 20px;background:var(--green-50);border-left:6px solid var(--green-600);
+      color:var(--green-800);border-radius:10px;font-weight:600;position:relative;
+    }
+    .callout::before {
+      content: "✓";
+      display: inline-block;
+      margin-right: 8px;
+      color: var(--green-600);
+      font-weight: bold;
+    }
+    .callout .small{display:block;margin-top:6px;opacity:.95;font-weight:500}
+
+    /* Print summary (visible only on print) */
+    .print-summary{display:none;text-align:left;margin:12px 0 0;font-size:.95rem;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 16px}
+
+    /* Enhanced table with alternating rows and gradient header */
+    .table-wrap{
+      margin-top:20px;width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;border-radius:10px;border:1px solid var(--line);background:#fff;
+      position:relative;
+    }
+    table{
+      width:100%;border-collapse:collapse;table-layout:auto;min-width:760px;
+    }
+    th,td{padding:14px 12px;border-bottom:1px solid var(--line);text-align:center}
+    th{
+      background: linear-gradient(135deg, #f5f5f7 0%, #e8e8ed 100%);
+      font-weight:700;position:sticky;top:0;z-index:1;
+      text-shadow: 0 1px 0 rgba(255,255,255,0.8);
+    }
+    tbody tr:nth-child(even) {
+      background-color: #fbfbfc;
+    }
+    tbody tr:hover {
+      background-color: #f0f9ff;
+    }
+    tfoot td{font-weight:700;background:#f0f0f5}
+
+    /* Final summary */
+    .result-summary{margin-top:24px;padding:20px;background:#f5f5f7;border-radius:12px;text-align:left;}
+    .result-summary h2{text-align:center;margin:0 0 16px;}
+
+    /* Enhanced Math Walkthrough with clearer sections */
+    .math-stack{
+      margin:16px 0 12px;padding:16px;background:#fff;border:1px solid var(--line);border-radius:10px;
+      display:grid;grid-template-columns: 1.2fr 0.2fr 1fr;gap:12px 10px;align-items:center;
+    }
+    .math-heading{font-weight:700;font-size:1.1rem;margin-bottom:8px;grid-column:1/-1;color:var(--brand);}
+    .math-stack .row{display:contents}
+    .math-label{font-weight:700}
+    .math-op{font-weight:700;text-align:center}
+    .math-val{text-align:right;font-variant-numeric:tabular-nums}
+    .math-total{border-top:2px solid #d6d6db;padding-top:12px;grid-column:1/-1;display:grid;grid-template-columns:1.2fr 0.2fr 1fr;align-items:center;}
+    .math-total.sub-total{border-top:1px solid #e5e5ea;padding-top:8px;margin-top:4px;}
+    .math-section-break{margin-top:20px;grid-column:1/-1;}
+    .math-note{font-size:.9rem;color:var(--muted);margin-top:8px;text-align:center;}
+    .summary-metrics{margin-top:16px;text-align:center;font-size:.95rem;color:var(--muted);}
+    .summary-metrics strong{color:var(--ink);}
+
+    .notes{margin-top:16px;padding:16px;background:#fff;border:1px solid var(--line);border-radius:10px;font-size:.95rem;}
+    .notes h3{margin:0 0 8px;font-size:1.05rem;}
+    .notes ul{margin:0 0 0 20px;padding:0}
+    .notes li{margin:6px 0}
+
+    /* Disclaimer */
+    .disclaimer{
+      width:min(100%, 960px);margin:0 auto 32px;background:#fff;border:1px solid var(--line);
+      border-radius:10px;padding:16px 20px;text-align:left;font-size:.85rem;color:#3a3a3c;
+    }
+    .disclaimer small{display:block;margin-top:8px;color:#6e6e73}
+
+    /* Live region for SR */
+    .sr-live{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden;}
+
+    /* ============== Screen breakpoints ============== */
+    @media (min-width: 680px){
+      .form-grid{grid-template-columns:1fr 1fr}
+      .btns{grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));}
+    }
+    @media (max-width: 900px){ th{font-size:.95rem;line-height:1.25} }
+    @media (max-width: 700px){
+      table{min-width:0}
+      thead{display:none}
+      table,tbody,tr,td{display:block;width:100%}
+      tr{background:#fff;border:1px solid var(--line);border-radius:10px;margin:12px 0;padding:12px 16px}
+      td{border:none;border-bottom:1px solid #f2f2f7;position:relative;padding-left:52%;text-align:right;min-height:44px}
+      td:last-child{border-bottom:none}
+      td::before{
+        content:attr(data-label);position:absolute;left:16px;top:50%;transform:translateY(-50%);
+        width:48%;text-align:left;font-weight:600;color:#3a3a3c;white-space:normal;font-size:.92rem;line-height:1.3;
+      }
+      .table-wrap{border:none}
+    }
+
+    /* Enhanced mobile touch targets */
+    @media (max-width: 680px) {
+      button, input, select {
+        min-height: 52px; /* Increased from 48px for better touch */
+      }
+      
+      .roi-info-icon {
+        width: 24px;
+        height: 24px; /* Larger for easier tapping */
+        font-size: 14px;
+      }
+    }
+
+    @media (prefers-contrast: high){ 
+      input,select,button{border-width:3px;} 
+      .callout,.warn,.error-message{border-left-width:8px;} 
+    }
+    @media (prefers-reduced-motion: reduce){
+      *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;}
+      button:hover{transform:none;}
+      .loading::after{animation: none;}
+    }
+
+    /* Enhanced motion for users who prefer it */
+    @media (prefers-reduced-motion: no-preference) {
+      .loading::after {
+        will-change: transform;
+      }
+      
+      .roi-info-icon {
+        transition: all 0.3s ease;
+      }
+      
+      tbody tr {
+        transition: background-color 0.2s ease;
+      }
+    }
+
+    /* ============== Print: single-page landscape, compact ============== */
+    @page { size: Letter landscape; margin: 0.25in; }
+    @media print{
+      /* Global shrink for print without user scaling */
+      html, body { font-size: 10px !important; background:#fff !important; }
+      .container{ width:100%; margin:0; padding:8px 10px; box-shadow:none; }
+      h1{ font-size:16px; margin-bottom:4px }
+      p.lead{ font-size:10px; margin-top:0 }
+
+      /* Hide interactive/extra things */
+      .form-grid,.btns,input,select,button,.skip-link,.roi-tooltip,.roi-info-icon{display:none !important}
+
+      /* Print summary on */
+      .print-summary{display:block !important; font-size:10px; padding:8px 10px; margin-top:6px}
+
+      /* Compact table */
+      table{ font-size:9px; min-width:0 }
+      th,td{ padding:4px 6px; text-align:center }
+      tfoot td{ font-weight:700 }
+
+      /* Callout visible (if positive) */
+      .callout{ display:block !important; padding:10px 12px; margin-top:8px }
+
+      /* Result summary compact */
+      .result-summary{ padding:10px 12px; margin-top:10px }
+      .math-stack{ padding:8px; gap:6px 6px; }
+      .math-label,.math-op,.math-val{ font-size:10px }
+      .summary-metrics{ font-size:10px }
+      .notes{ font-size:9.5px; padding:8px 10px; }
+
+      /* Avoid page breaks inside key blocks */
+      .result-summary,.print-summary,table,.callout,.disclaimer{ page-break-inside:avoid }
+      .disclaimer{ border:none; padding:6px 8px; font-size:9px; margin-top:8px }
+    }
+  </style>
+</head>
+<body>
+<a href="#main-content" class="skip-link">Skip to main content</a>
+<div class="sr-live" id="liveRegion" aria-atomic="true"></div>
+
+<div class="container">
+  <main id="main-content">
+    <h1>RV Finance Edge</h1>
+    <p class="lead">See how financing your RV—plus potential tax deductions and investing the cash—can outperform paying cash outright.</p>
+
+    <form id="calculatorForm" novalidate>
+      <div class="form-grid" role="group" aria-labelledby="input-section">
+        <h2 id="input-section" class="sr-only">Calculation Inputs</h2>
+
+        <div class="form-group">
+          <label for="amount" class="required">Amount Financed ($):</label>
+          <input type="text" inputmode="decimal" pattern="[0-9,]*\.?[0-9]*" id="amount" value="65000"
+                 required min="1000" max="2000000"
+                 aria-describedby="amount-help amount-error">
+          <div id="amount-help" class="note-inline">Enter the total amount you plan to finance</div>
+          <div id="amount-error" class="error-message" role="alert"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="apr" class="required">APR (%):</label>
+          <input type="text" inputmode="decimal" pattern="[0-9]*\.?[0-9]*" id="apr" value="9.00"
+                 required min="0.1" max="50"
+                 aria-describedby="apr-help apr-error">
+          <div id="apr-help" class="note-inline">Annual Percentage Rate from your lender</div>
+          <div id="apr-error" class="error-message" role="alert"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="returnRate" class="required">
+            Expected Investment Return (%):
+            <div class="roi-tooltip-container">
+              <button type="button" class="roi-info-icon hidden" id="roiInfoIcon"
+                      aria-describedby="roi-tooltip" aria-expanded="false" aria-label="Show break-even info">!</button>
+              <div id="roi-tooltip" class="roi-tooltip" role="tooltip">
+                <div id="roi-tooltip-content"></div>
+              </div>
+            </div>
+          </label>
+          <input type="text" inputmode="decimal" pattern="[0-9]*\.?[0-9]*"
+                 id="returnRate" value="6.00" required min="0" max="50"
+                 aria-describedby="returnRate-help returnRate-error">
+          <div id="returnRate-error" class="error-message" role="alert"></div>
+
+          <div id="returnRate-help" class="note-inline" style="margin-top:6px;">
+            <input type="checkbox" id="useSpyReturn" aria-describedby="spy-desc">
+            <label for="useSpyReturn" id="spyLabel" style="cursor:pointer;">
+              Match S&P 500 average (preset by term)
+            </label>
+            <div id="spy-desc" style="font-size:0.9rem; margin-top:2px;">
+              Uses a preset table of historical CAGRs for common terms (no live data).
+            </div>
+          </div>
+
+          <div id="returnGuidance" class="warn" role="alert" aria-live="polite"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="loanTerm" class="required">Loan Term (Months):</label>
+          <select id="loanTerm" required aria-describedby="loanTerm-help">
+            <option value="72">72 months (6 years)</option>
+            <option value="84">84 months (7 years)</option>
+            <option value="96">96 months (8 years)</option>
+            <option value="120">120 months (10 years)</option>
+            <option value="144" selected>144 months (12 years)</option>
+            <option value="180">180 months (15 years)</option>
+            <option value="240">240 months (20 years)</option>
+          </select>
+          <div id="loanTerm-help" class="note-inline">Length of your loan term</div>
+        </div>
+
+        <div class="form-group">
+          <label for="taxRate">Custom Tax Deduction Rate (%):</label>
+          <input type="text" inputmode="decimal" pattern="[0-9]*\.?[0-9]*" id="taxRate" value="0"
+                 min="0" max="100"
+                 aria-describedby="taxRate-help taxRate-error">
+          <div id="taxRate-help" class="note-inline">If income isn't provided, enter your combined <strong>marginal</strong> rate here.</div>
+          <div class="note-inline" style="margin-top:4px;">
+            💡 RV loan interest may be deductible if the RV qualifies as a second home (sleeping, cooking, toilet). Consult a tax professional.
+          </div>
+          <div id="taxRate-error" class="error-message" role="alert"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="annualIncome">Annual Income ($) (Optional):</label>
+          <input type="text" inputmode="decimal" pattern="[0-9,]*" id="annualIncome"
+                 value=""
+                 aria-describedby="annualIncome-help annualIncome-error">
+          <div id="annualIncome-help" class="note-inline">Used to calculate your <strong>marginal</strong> tax bracket (federal + optional state).</div>
+          <div id="annualIncome-error" class="error-message" role="alert"></div>
+        </div>
+
+        <div class="form-group">
+          <label for="stateSelect">Select Your State (Optional):</label>
+          <select id="stateSelect" aria-describedby="stateSelect-help">
+            <option value="">None</option>
+            <option value="Texas">Texas (no income tax)</option>
+            <option value="Florida">Florida (no income tax)</option>
+            <option value="Oregon">Oregon</option>
+            <option value="California">California</option>
+            <option value="New York">New York</option>
+            <option value="Other">Other state (enter Custom Tax Rate)</option>
+          </select>
+          <div id="stateSelect-help" class="note-inline">Modeled states: OR, CA, NY (2025). No-tax states set to 0%. Others: use Custom Tax Rate.</div>
+        </div>
+      </div>
+
+      <div class="btns">
+        <button type="submit" id="calculateBtn">Compare Options</button>
+        <button type="button" onclick="handlePrint()">Print Results</button>
+      </div>
+    </form>
+
+    <!-- Positive ROI Callout -->
+    <div id="roiCallout" class="callout" role="status" aria-live="polite">
+      <div id="roi-callout-title" class="sr-only">Investment Return Summary</div>
+    </div>
+
+    <!-- PRINT SUMMARY (only visible on print) -->
+    <div id="printSummary" class="print-summary"></div>
+
+    <!-- Results Section -->
+    <section id="resultsSection" style="display:none;" aria-labelledby="results-heading">
+      <h2 id="results-heading" class="sr-only">Calculation Results</h2>
+      <div class="table-wrap">
+        <table role="table" aria-label="Yearly breakdown of investment vs financing">
+          <thead>
+            <tr>
+              <th scope="col">Year</th>
+              <th scope="col">Investment Start&nbsp;($)</th>
+              <th scope="col">Investment Earned&nbsp;($)</th>
+              <th scope="col">Tax Savings&nbsp;($)</th>
+              <th scope="col">Interest Paid&nbsp;($)</th>
+              <th scope="col">Loan Remaining&nbsp;($)</th>
+            </tr>
+          </thead>
+          <tbody id="results"></tbody>
+          <tfoot id="totals">
+            <tr>
+              <td colspan="2" style="text-align:right; font-weight:700;">Total Investment Growth:</td>
+              <td id="footerTotalInvestmentGrowth" style="font-weight:700;"></td>
+              <td colspan="3"></td>
+            </tr>
+            <tr>
+              <td colspan="2" style="text-align:right; font-weight:700;">Total Tax Savings Breakdown:</td>
+              <td id="footerTaxSavingsBreakdown" colspan="4" style="text-align:left; font-weight:700; padding-left: 12px;"></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <div class="result-summary" id="summary">
+        <h2 id="summary-heading">Final Breakdown</h2>
+
+        <div id="mathStack" class="math-stack" aria-labelledby="math-heading-main"></div>
+        <div id="summaryMetrics" class="summary-metrics"></div>
+        <div id="mathNote" class="math-note"></div>
+
+        <div class="notes">
+          <h3 id="notes-heading">Definitions</h3>
+          <ul>
+            <li><strong>Monthly Payment</strong>: Fixed payment calculated from Amount, APR, and Term.</li>
+            <li><strong>Total Payments</strong>: Monthly Payment × number of months.</li>
+            <li><strong>Interest Paid</strong>: Sum of the interest portion of each monthly payment across the term.</li>
+            <li><strong>Investment End Value</strong>: Value of the invested cash (equal to Amount Financed) compounded monthly at the Expected Return for the loan term.</li>
+            <li><strong>Net Investment Gain</strong>: Investment End Value − Amount Financed.</li>
+            <li><strong>Tax Write-Off Savings</strong>: Estimated deduction value of loan interest (uses federal + optional state marginal rates; simplified/approximate).</li>
+            <li><strong>Overall Net Benefit</strong>: (Net Investment Gain + Tax Savings) − Interest Paid. <em>Positive</em> → financing + investing beat paying cash; <em>Negative</em> → paying cash wins under these assumptions.</li>
+            <li><strong>Break-even Return</strong>: Minimum annual investment return (CAGR, compounded monthly) that makes Overall Net Benefit = $0 for your inputs. If Expected Return is below this, increase to at least the break-even % to avoid a negative result.</li>
+            <li><strong>SPY Match (optional)</strong>: Fills Expected Return with a preset historical CAGR of SPY for the selected term (no live data/APIs).</li>
+            <li><strong>Assumptions</strong>: No extra contributions/withdrawals; investment compounds monthly; tax uses marginal-rate approximation; local/state nuances simplified.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="disclaimer">
+  <strong>Important:</strong> This tool is for illustrative and educational purposes only. Not financial, tax, or legal advice. Results are estimates based on user inputs and simplified assumptions. Investment returns are not guaranteed and may be negative. Consult appropriate professionals for your situation. Financing offers are subject to credit approval and lender terms.
+</div>
+
+<script>
+  const COL_LABELS = {
+    year: "Year",
+    startInvest: "Investment Start\u00A0($)",
+    investEarned: "Investment Earned\u00A0($)",
+    taxSavings: "Tax Savings\u00A0($)",
+    interestPaid: "Interest Paid\u00A0($)",
+    loanRemaining: "Loan Remaining\u00A0($)"
+  };
+
+  const validationRules = {
+    amount: { min: 1000, max: 2000000, required: true, name: "Amount Financed" },
+    apr: { min: 0.1, max: 50, required: true, name: "APR" },
+    returnRate: { min: 0, max: 50, required: true, name: "Investment Return Rate" },
+    taxRate: { min: 0, max: 100, required: false, name: "Tax Rate" },
+    annualIncome: { min: 0, max: 10000000, required: false, name: "Annual Income" }
+  };
+
+  /* Preset SPY CAGRs by term (approx.) – no APIs */
+  let spyAnnualReturns = { 6: 12.36, 7: 11.93, 8: 10.45, 10: 10.13, 12: 9.80, 15: 9.60, 20: 9.30 };
+
+  let validationTimeouts = {};
+  function debounce(func, wait) {
+    return function executedFunction(...args) {
+      const later = () => {
+        clearTimeout(validationTimeouts[func.name]);
+        func(...args);
+      };
+      clearTimeout(validationTimeouts[func.name]);
+      validationTimeouts[func.name] = setTimeout(later, wait);
+    };
+  }
+
+  function validateField(fieldId, value) {
+    const field = document.getElementById(fieldId);
+    const errorDiv = document.getElementById(fieldId + '-error');
+    const rules = validationRules[fieldId];
+    if (!rules) return true;
+
+    const numValue = parseFloat(String(value).replace(/,/g, ''));
+    let isValid = true;
+    let errorMessage = '';
+
+    if (rules.required && (value === '' || isNaN(numValue))) {
+      isValid = false;
+      errorMessage = `${rules.name} is required.`;
+    } else if (!isNaN(numValue)) {
+      if (numValue < rules.min) {
+        isValid = false;
+        errorMessage = `${rules.name} must be at least ${rules.min.toLocaleString()}.`;
+      } else if (numValue > rules.max) {
+        isValid = false;
+        errorMessage = `${rules.name} cannot exceed ${rules.max.toLocaleString()}.`;
+      }
+    }
+
+    field.classList.toggle('invalid', !isValid);
+    errorDiv.textContent = errorMessage;
+    errorDiv.classList.toggle('show', !isValid);
+
+    if (!isValid && errorMessage) {
+      announceToScreenReader(`Error: ${errorMessage}`);
+    }
+
+    return isValid;
+  }
+
+  function announceToScreenReader(message) {
+    const liveRegion = document.getElementById('liveRegion');
+    liveRegion.textContent = message;
+    setTimeout(() => liveRegion.textContent = '', 1000);
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    Object.keys(validationRules).forEach(fieldId => {
+      const field = document.getElementById(fieldId);
+      if (field) {
+        field.addEventListener('input', debounce(function() {
+          validateField(fieldId, this.value);
+        }, 300));
+        field.addEventListener('blur', function() {
+          validateField(fieldId, this.value);
+        });
+      }
+    });
+
+    const spyCheckbox = document.getElementById('useSpyReturn');
+    const returnRateInput = document.getElementById('returnRate');
+    const loanTermInput = document.getElementById('loanTerm');
+
+    function setSpyReturnIfChecked() {
+      if (spyCheckbox.checked) {
+        const years = Math.round(parseInt(loanTermInput.value, 10) / 12);
+        const spyReturn = spyAnnualReturns[years];
+        if (spyReturn !== undefined) {
+          returnRateInput.value = spyReturn.toFixed(2);
+          validateField('returnRate', returnRateInput.value);
+        }
+      }
+    }
+    spyCheckbox.addEventListener('change', () => { if (spyCheckbox.checked) setSpyReturnIfChecked(); });
+    loanTermInput.addEventListener('change', () => { if (spyCheckbox.checked) setSpyReturnIfChecked(); });
+
+    document.getElementById('calculatorForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      calculate();
+    });
+
+    ['amount', 'annualIncome'].forEach(fieldId => {
+      const field = document.getElementById(fieldId);
+      if (field) {
+        field.addEventListener('blur', function() {
+          const num = parseFloat(this.value.replace(/,/g, ''));
+          if (!isNaN(num)) this.value = num.toLocaleString('en-US', { maximumFractionDigits: 0 });
+        });
+        field.addEventListener('focus', function() { this.value = this.value.replace(/,/g, ''); });
+      }
+    });
+
+    // Add ROI tooltip interaction handlers
+    const roiIcon = document.getElementById('roiInfoIcon');
+    const roiTooltip = document.getElementById('roi-tooltip');
+
+    if (roiIcon && roiTooltip) {
+      roiIcon.addEventListener('click', function() {
+        const isVisible = roiTooltip.classList.contains('show');
+        roiTooltip.classList.toggle('show', !isVisible);
+        roiIcon.setAttribute('aria-expanded', (!isVisible).toString());
+      });
+
+      roiIcon.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          roiIcon.click();
+        }
+        if (e.key === 'Escape') {
+          roiTooltip.classList.remove('show');
+          roiIcon.setAttribute('aria-expanded', 'false');
+        }
+      });
+
+      // Close tooltip when clicking outside
+      document.addEventListener('click', function(e) {
+        if (!roiIcon.contains(e.target) && !roiTooltip.contains(e.target)) {
+          roiTooltip.classList.remove('show');
+          roiIcon.setAttribute('aria-expanded', 'false');
+        }
+      });
+    }
+  });
+
+  /* ====================== TAX HELPERS (2025; single filer approximation) ====================== */
+
+  function getMarginalTaxRate(income, brackets) {
+    const taxable = Math.max(0, Number(income) || 0);
+    if (taxable === 0) return 0;
+    for (const bracket of brackets) {
+      if (taxable <= bracket.cap) return bracket.rate * 100;
+    }
+    return brackets[brackets.length - 1].rate * 100;
+  }
+
+  function getFederalTaxRate(annualIncome) {
+    const B = [
+      { cap: 11925,   rate: 0.10 }, { cap: 48475,   rate: 0.12 },
+      { cap: 103350,  rate: 0.22 }, { cap: 197300,  rate: 0.24 },
+      { cap: 250525,  rate: 0.32 }, { cap: 626350,  rate: 0.35 },
+      { cap: Number.POSITIVE_INFINITY, rate: 0.37 }
+    ];
+    return getMarginalTaxRate(annualIncome, B);
+  }
+
+  function getOregonRate(annualIncome) {
+    const B = [
+      { cap: 4300,    rate: 0.0475 }, { cap: 10750,   rate: 0.0675 },
+      { cap: 125000,  rate: 0.0875 }, { cap: Number.POSITIVE_INFINITY, rate: 0.099 }
+    ];
+    return getMarginalTaxRate(annualIncome, B);
+  }
+
+  function getCaliforniaRate(annualIncome) {
+    const B = [
+      { cap: 10756,   rate: 0.01  }, { cap: 25499,   rate: 0.02  },
+      { cap: 40245,   rate: 0.04  }, { cap: 55866,   rate: 0.06  },
+      { cap: 70606,   rate: 0.08  }, { cap: 360659,  rate: 0.093 },
+      { cap: 432787,  rate: 0.103 }, { cap: 721314,  rate: 0.113 },
+      { cap: Number.POSITIVE_INFINITY, rate: 0.123 }
+    ];
+    return getMarginalTaxRate(annualIncome, B);
+  }
+
+  function getNewYorkRate(annualIncome) {
+    const B = [
+      { cap: 8500,      rate: 0.04  }, { cap: 11700,     rate: 0.045 },
+      { cap: 13900,     rate: 0.0525}, { cap: 80650,     rate: 0.055 },
+      { cap: 215400,    rate: 0.06  }, { cap: 1077550,   rate: 0.0685},
+      { cap: 5000000,   rate: 0.0965}, { cap: 25000000,  rate: 0.103 },
+      { cap: Number.POSITIVE_INFINITY, rate: 0.109 }
+    ];
+    return getMarginalTaxRate(annualIncome, B);
+  }
+
+  function getStateTaxRate(annualIncome, state) {
+    if (!state || state === "Other") return null;
+    switch (state) {
+      case "Texas": case "Florida": return 0;
+      case "Oregon": return getOregonRate(annualIncome);
+      case "California": return getCaliforniaRate(annualIncome);
+      case "New York": return getNewYorkRate(annualIncome);
+      default: return null;
+    }
+  }
+  
+  /* ====================== MAIN CALC (with Break-even solver) ====================== */
+
+  let lastComputed = null;
+
+  function updateROITooltip(returnRate, requiredRate, showTooltip) {
+    const icon = document.getElementById('roiInfoIcon');
+    const tooltip = document.getElementById('roi-tooltip');
+    const tooltipContent = document.getElementById('roi-tooltip-content');
+
+    icon.classList.add('hidden');
+    tooltip.classList.remove('show');
+    icon.setAttribute('aria-expanded', 'false');
+
+    if (showTooltip && requiredRate != null && requiredRate > 0 && returnRate < requiredRate) {
+      const difference = requiredRate - returnRate;
+      tooltipContent.innerHTML = `
+        <strong>Break-even return needed</strong><br/>
+        Required: <strong>${requiredRate.toFixed(2)}%</strong> annually<br/>
+        Current: ${returnRate.toFixed(2)}% annually<br/>
+        Increase by: <strong>+${difference.toFixed(2)}%</strong>
+      `;
+      icon.classList.remove('hidden');
+    }
+  }
+
+  function calculate() {
+    let isFormValid = true;
+    Object.keys(validationRules).forEach(fieldId => {
+      const field = document.getElementById(fieldId);
+      if (field && !validateField(fieldId, field.value)) isFormValid = false;
+    });
+    if (!isFormValid) { announceToScreenReader('Please fix the errors in the form before calculating.'); return; }
+
+    const calculateBtn = document.getElementById('calculateBtn');
+    calculateBtn.classList.add('loading');
+    calculateBtn.disabled = true;
+    calculateBtn.textContent = 'Calculating...';
+
+    setTimeout(() => {
+      try { performCalculation(); }
+      finally {
+        calculateBtn.classList.remove('loading');
+        calculateBtn.disabled = false;
+        calculateBtn.textContent = 'Compare Options';
+      }
+    }, 100);
+  }
+
+  function performCalculation() {
+    // Reset UI
+    document.getElementById("results").innerHTML = "";
+    document.getElementById("mathStack").innerHTML = "";
+    document.getElementById("summaryMetrics").innerHTML = "";
+    document.getElementById("mathNote").textContent = "";
+    const callout = document.getElementById("roiCallout");
+    callout.style.display = "none";
+    callout.innerHTML = "";
+    document.getElementById("printSummary").innerHTML = "";
+    const guidance = document.getElementById("returnGuidance");
+    guidance.style.display = "none";
+    guidance.innerHTML = "";
+    updateROITooltip(0,0,false);
+
+    // Inputs
+    const toNum = v => parseFloat(String(v).replace(/,/g,""));
+    const amount = toNum(document.getElementById("amount").value);
+    const apr = toNum(document.getElementById("apr").value);
+    let returnRate = toNum(document.getElementById("returnRate").value);
+    const loanTerm = parseInt(document.getElementById("loanTerm").value, 10);
+    const taxRateInputRaw = document.getElementById("taxRate").value;
+    const taxRateInput = taxRateInputRaw === "" ? NaN : toNum(taxRateInputRaw);
+    const annualIncomeStr = document.getElementById("annualIncome").value.trim();
+    const annualIncome = annualIncomeStr ? toNum(annualIncomeStr) : NaN;
+    const stateSelected = document.getElementById("stateSelect").value;
+
+    if (isNaN(amount) || isNaN(apr) || isNaN(returnRate) || isNaN(loanTerm) || amount <= 0 || loanTerm <= 0) {
+      announceToScreenReader("Please enter valid financing values."); return;
+    }
+
+    // Tax Rates
+    let federalTaxRate, stateTaxRate, taxMethodNote;
+    if (!isNaN(annualIncome) && annualIncome > 0) {
+      federalTaxRate = getFederalTaxRate(annualIncome);
+      if (stateSelected && stateSelected !== "") {
+        const rateOrNull = getStateTaxRate(annualIncome, stateSelected);
+        if (rateOrNull === null) {
+          if (isNaN(taxRateInput)) { announceToScreenReader("For your selected state, enter a Custom Tax Deduction Rate (combined marginal %)."); return; }
+          const combined = Math.max(0, taxRateInput);
+          stateTaxRate = Math.max(0, combined - federalTaxRate);
+          taxMethodNote = `Using income ($${annualIncome.toLocaleString()}) and custom combined rate ${combined.toFixed(2)}% (Fed ${federalTaxRate.toFixed(2)}% + State ${stateTaxRate.toFixed(2)}%).`;
+        } else {
+          stateTaxRate = rateOrNull;
+          taxMethodNote = `Using income ($${annualIncome.toLocaleString()}) for ${stateSelected} brackets (Fed ${federalTaxRate.toFixed(2)}% + State ${stateTaxRate.toFixed(2)}%).`;
+        }
+      } else {
+        stateTaxRate = 0;
+        taxMethodNote = `Using income ($${annualIncome.toLocaleString()}) to calculate marginal rates (Fed ${federalTaxRate.toFixed(2)}%, State 0%).`;
+      }
+    } else {
+      if (isNaN(taxRateInput)) { announceToScreenReader("Provide either Annual Income (and optionally a State) or a Custom Tax Deduction Rate."); return; }
+      federalTaxRate = Math.max(0, taxRateInput);
+      stateTaxRate = 0;
+      taxMethodNote = `Using custom combined marginal rate ${federalTaxRate.toFixed(2)}% (treated as Federal).`;
+    }
+
+    // Optional SPY preset
+    if (document.getElementById('useSpyReturn').checked) {
+      const years = Math.round(loanTerm / 12);
+      if (spyAnnualReturns[years] !== undefined) returnRate = spyAnnualReturns[years];
+    }
+
+    // Constants
+    const r = apr / 100 / 12; // monthly loan rate
+    const n = loanTerm;       // months
+    const monthlyPayment = (r === 0) ? amount / n :
+      amount * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+
+    // Function: net benefit at a given annual rate %
+    function netBenefitForRate(ratePct){
+      const i = ratePct / 100 / 12;
+      let yearlyInvestmentBalance = amount;
+      let totalInterestPaid = 0;
+      let totalFederalTaxSavings = 0;
+      let totalStateTaxSavings = 0;
+      let yearlyLoanBalance = amount;
+
+      for (let year = 1; year <= n / 12; year++) {
+        let yearlyInterestPaid = 0;
+        for (let month = 1; month <= 12; month++) {
+          const interestForMonth = yearlyLoanBalance * r;
+          yearlyInterestPaid += interestForMonth;
+          yearlyLoanBalance -= (monthlyPayment - interestForMonth);
+        }
+        const yearlyInvestmentGrowth = yearlyInvestmentBalance * (Math.pow(1 + i, 12) - 1);
+        yearlyInvestmentBalance += yearlyInvestmentGrowth;
+
+        const yearlyFederalTaxSavings = yearlyInterestPaid * (federalTaxRate / 100);
+        const yearlyStateTaxSavings = yearlyInterestPaid * (stateTaxRate / 100);
+
+        totalInterestPaid += yearlyInterestPaid;
+        totalFederalTaxSavings += yearlyFederalTaxSavings;
+        totalStateTaxSavings += yearlyStateTaxSavings;
+      }
+
+      const totalPayments = monthlyPayment * n;
+      const totalTaxSavings = totalFederalTaxSavings + totalStateTaxSavings;
+      const investmentEnd = yearlyInvestmentBalance;
+      const netBenefit = (investmentEnd + totalTaxSavings) - totalPayments;
+      return netBenefit;
+    }
+
+    // Break-even solver (binary search)
+    let requiredRate = null;
+    const nbAt0 = netBenefitForRate(0);
+    if (nbAt0 >= 0) {
+      requiredRate = 0;
+    } else {
+      let low = 0, high = 50;
+      let nbHigh = netBenefitForRate(high);
+      if (nbHigh <= 0) {
+        requiredRate = null; // unreachable under 50%
+      } else {
+        for (let iter = 0; iter < 40; iter++) {
+          const mid = (low + high) / 2;
+          const nbMid = netBenefitForRate(mid);
+          if (nbMid >= 0) high = mid; else low = mid;
+        }
+        requiredRate = high;
+      }
+    }
+
+    // Yearly simulation for display using CURRENT returnRate
+    const i = returnRate / 100 / 12;
+    let yearlyInvestmentBalance = amount;
+    let totalInterestPaid = 0;
+    let totalInvestmentGrowth = 0;
+    let totalFederalTaxSavings = 0;
+    let totalStateTaxSavings = 0;
+    const results = [];
+    let yearlyLoanBalance = amount;
+
+    for (let year = 1; year <= n / 12; year++) {
+      let yearlyInterestPaid = 0;
+      const startingInvestmentBalance = yearlyInvestmentBalance;
+
+      for (let month = 1; month <= 12; month++) {
+        const interestForMonth = yearlyLoanBalance * r;
+        yearlyInterestPaid += interestForMonth;
+        yearlyLoanBalance -= (monthlyPayment - interestForMonth);
+      }
+      
+      const yearlyInvestmentGrowth = yearlyInvestmentBalance * (Math.pow(1 + i, 12) - 1);
+      yearlyInvestmentBalance += yearlyInvestmentGrowth;
+
+      const yearlyFederalTaxSavings = yearlyInterestPaid * (federalTaxRate / 100);
+      const yearlyStateTaxSavings = yearlyInterestPaid * (stateTaxRate / 100);
+
+      totalInterestPaid += yearlyInterestPaid;
+      totalInvestmentGrowth += yearlyInvestmentGrowth;
+      totalFederalTaxSavings += yearlyFederalTaxSavings;
+      totalStateTaxSavings += yearlyStateTaxSavings;
+
+      results.push({
+        year, startInvest: startingInvestmentBalance, investEarned: yearlyInvestmentGrowth,
+        taxSavings: yearlyFederalTaxSavings + yearlyStateTaxSavings, interestPaid: yearlyInterestPaid,
+        loanRemaining: Math.max(0, yearlyLoanBalance)
+      });
+    }
+
+    // Totals
+    const totalPayments = monthlyPayment * n;
+    const totalTaxSavings = totalFederalTaxSavings + totalStateTaxSavings;
+    const investmentEnd = yearlyInvestmentBalance;
+    const netBenefit = (investmentEnd + totalTaxSavings) - totalPayments;
+    const netInvestmentGain = investmentEnd - amount;
+    const annualWriteOff = totalInterestPaid / (n / 12);
+    const loanYears = n / 12;
+
+    lastComputed = {
+      amount, apr, loanTerm, totalPayments, totalTaxSavings, netBenefit, results, taxMethodNote,
+      annualWriteOff, totalInterestPaid, investmentEnd, totalInvestmentGrowth,
+      totalFederalTaxSavings, totalStateTaxSavings, netInvestmentGain, loanYears, returnRate, requiredRate, monthlyPayment
+    };
+
+    renderResults(lastComputed);
+  }
+
+  function renderResults(data) {
+    const {
+      amount, apr, loanTerm, totalPayments, totalTaxSavings, netBenefit, results, taxMethodNote,
+      annualWriteOff, totalInterestPaid, investmentEnd, totalInvestmentGrowth,
+      totalFederalTaxSavings, totalStateTaxSavings, netInvestmentGain, loanYears, returnRate, requiredRate, monthlyPayment
+    } = data;
+    
+    document.getElementById("resultsSection").style.display = "block";
+    const tableBody = document.getElementById("results");
+    const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+    const fmt = v => formatter.format(v);
+
+    // Table
+    results.forEach(row => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td data-label="${COL_LABELS.year}">${row.year}</td>
+        <td data-label="${COL_LABELS.startInvest}">${fmt(row.startInvest)}</td>
+        <td data-label="${COL_LABELS.investEarned}">${fmt(row.investEarned)}</td>
+        <td data-label="${COL_LABELS.taxSavings}">${fmt(row.taxSavings)}</td>
+        <td data-label="${COL_LABELS.interestPaid}">${fmt(row.interestPaid)}</td>
+        <td data-label="${COL_LABELS.loanRemaining}">${fmt(row.loanRemaining)}</td>
+      `;
+      tableBody.appendChild(tr);
+    });
+
+    // Footer totals
+    document.getElementById("footerTotalInvestmentGrowth").textContent = fmt(totalInvestmentGrowth);
+    const taxBreakdownCell = document.getElementById("footerTaxSavingsBreakdown");
+    if (totalStateTaxSavings > 0.01) {
+      taxBreakdownCell.textContent = `${fmt(totalFederalTaxSavings)} (Fed) + ${fmt(totalStateTaxSavings)} (State) = ${fmt(totalTaxSavings)} (Total)`;
+    } else {
+      taxBreakdownCell.textContent = `${fmt(totalTaxSavings)} (Total)`;
+    }
+
+    // Enhanced Math stack with clearer benefit sections
+    const mathStack = document.getElementById("mathStack");
+    mathStack.innerHTML = `
+      <div class="math-heading" id="math-heading-main">Investment Performance</div>
+      <div class="row"><div class="math-label">Investment End Value:</div><div class="math-op"></div><div class="math-val">${fmt(investmentEnd)}</div></div>
+      <div class="row"><div class="math-label">Initial Investment (Cost):</div><div class="math-op">−</div><div class="math-val">${fmt(amount)}</div></div>
+      <div class="math-total sub-total">
+        <div class="math-label">Net Investment Gain:</div>
+        <div class="math-op">=</div>
+        <div class="math-val">${fmt(netInvestmentGain)}</div>
+      </div>
+      
+      <div class="math-heading math-section-break">Overall Benefit Calculation</div>
+      <div class="row"><div class="math-label">Net Investment Gain:</div><div class="math-op">+</div><div class="math-val">${fmt(netInvestmentGain)}</div></div>
+      <div class="row"><div class="math-label">Cumulative Tax Savings:</div><div class="math-op">+</div><div class="math-val">${fmt(totalTaxSavings)}</div></div>
+      <div class="row"><div class="math-label">Total Interest Paid:</div><div class="math-op">−</div><div class="math-val">${fmt(totalInterestPaid)}</div></div>
+      <div class="math-total">
+        <div class="math-label">Overall Net Benefit:</div>
+        <div class="math-op">=</div>
+        <div class="math-val" style="color: ${netBenefit >= 0 ? 'var(--green-600)' : 'var(--error-600)'}">${fmt(netBenefit)}</div>
+      </div>
+    `;
+
+    // Summary metrics
+    const summaryMetrics = document.getElementById("summaryMetrics");
+    const isPositive = netBenefit >= 0;
+    const color = isPositive ? 'var(--green-600)' : 'var(--error-600)';
+    const outcome = isPositive ? 'ADVANTAGE to financing + investing' : 'ADVANTAGE to paying cash';
+    
+    summaryMetrics.innerHTML = `
+      <strong style="color: ${color};">${outcome}</strong><br/>
+      Monthly Payment: <strong>${fmt(monthlyPayment)}</strong> | 
+      Investment Growth: <strong>${fmt(totalInvestmentGrowth)}</strong> | 
+      Tax Write-Off: <strong>${fmt(totalTaxSavings)}</strong>
+    `;
+
+    // Math note
+    const mathNote = document.getElementById("mathNote");
+    mathNote.textContent = taxMethodNote;
+
+    // ROI callout and guidance
+    if (netBenefit >= 0) {
+      const callout = document.getElementById("roiCallout");
+      callout.innerHTML = `
+        <strong>✨ Financing Strategy Wins!</strong><br/>
+        <span class="small">
+          By financing your RV and investing the cash at ${returnRate.toFixed(2)}% annually, 
+          you come out ahead by <strong>${fmt(netBenefit)}</strong> compared to paying cash outright.
+        </span>
+      `;
+      callout.style.display = "block";
+    }
+
+    // Show tooltip if return rate is below break-even
+    updateROITooltip(returnRate, requiredRate, requiredRate != null && returnRate < requiredRate);
+
+    // Guidance alert
+    if (requiredRate != null && returnRate < requiredRate) {
+      const guidance = document.getElementById("returnGuidance");
+      guidance.innerHTML = `
+        Your expected return (${returnRate.toFixed(2)}%) is below the break-even rate of ${requiredRate.toFixed(2)}%. 
+        Consider increasing your return expectation or reassessing whether financing makes sense.
+        <small>The break-even rate is the minimum return needed for the financing strategy to outperform paying cash.</small>
+      `;
+      guidance.style.display = "block";
+    }
+
+    // Print summary
+    const printSummary = document.getElementById("printSummary");
+    printSummary.innerHTML = `
+      <strong>RV Finance Edge Calculator Results</strong><br/>
+      Amount: ${fmt(amount)} | APR: ${apr.toFixed(2)}% | Term: ${loanYears} years | Return: ${returnRate.toFixed(2)}%<br/>
+      <strong>Net Benefit: ${fmt(netBenefit)}</strong> (${isPositive ? 'Financing Wins' : 'Cash Wins'})
+    `;
+
+    // Announce result to screen readers
+    announceToScreenReader(`Calculation complete. ${isPositive ? 'Financing strategy shows an advantage' : 'Paying cash shows an advantage'} of ${fmt(Math.abs(netBenefit))}.`);
+
+    // Smooth scroll to results
+    document.getElementById("resultsSection").scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function handlePrint() {
+    if (lastComputed) {
+      window.print();
+    } else {
+      announceToScreenReader("Please calculate results before printing.");
+    }
+  }
+</script>
+</body>
+</html>
