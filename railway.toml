@@ -1,13 +1,10 @@
+# railway.toml
 [build]
 builder = "dockerfile"
 
 [deploy]
-startCommand = "gunicorn --bind 0.0.0.0:8080 --timeout 120 --workers 2 server:app"
+# Bind to the dynamic $PORT that Railway injects (so Cloudflare can proxy on 443)
+# Using bash -lc ensures $PORT is expanded even if Railway execs directly.
+startCommand = "bash -lc 'gunicorn --bind 0.0.0.0:${PORT} --timeout 120 --workers 2 server:app'"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
-
-
-# Volume for persistent storage of database and screenshots
-# Note: You'll need to create this volume in Railway dashboard
-# Path: /app/data
-# This will persist the SQLite database and screenshot files across deployments
