@@ -1702,6 +1702,10 @@ def admin_dashboard():
               <td>
                 <a href="/view/{{capture.id}}?force=1" class="btn" style="padding: 6px 12px; font-size: 12px;">Force PDF</a>
                 <a href="/view/{{capture.id}}?force=1&restamp=1" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px; margin-left:8px;">Restamp + PDF</a>
+                <a href="https://rv-sign-builder-862473457030.us-central1.run.app/?stockNumber={{capture.stock}}" 
+                class="btn btn-secondary" 
+               style="padding: 6px 12px; font-size: 12px; margin-left:8px;" 
+                target="_blank">Print Sign</a>
               </td>
             </tr>
             {% endfor %}
@@ -2058,6 +2062,11 @@ def view_capture(capture_id):
             as_attachment=True,
             download_name=f"CW_Capture_{capture['stock']}_{capture_id}.pdf"
         )
+        &nbsp;|&nbsp;
+<a href="https://rv-sign-builder-862473457030.us-central1.run.app/?stockNumber={{capture.stock}}" 
+   class="view-btn" 
+   target="_blank">Print Sign</a>
+
 
     # Rebuild (optionally re-stamp)
     price_path = capture['price_screenshot_path']
