@@ -8,6 +8,8 @@ import sqlite3
 from contextlib import contextmanager
 from functools import wraps
 import threading
+from reportlab.lib.utils import ImageReader
+
 
 # -------------------- Railway-friendly defaults & config --------------------
 
@@ -27,6 +29,10 @@ STORAGE_MODE = os.getenv("STORAGE_MODE", "persistent")  # persistent or temp
 PERSISTENT_STORAGE_PATH = os.getenv("PERSISTENT_STORAGE_PATH", os.path.join(DEFAULT_DATA_DIR, "captures"))
 AUTO_CLEANUP_DAYS = int(os.getenv("AUTO_CLEANUP_DAYS", "90"))
 
+
+# Sign Builder integration
+SIGN_BUILDER_BASE = os.getenv("SIGN_BUILDER_BASE", "https://rv-sign-builder-862473457030.us-central1.run.app")
+SIGN_WAIT_MS = int(os.getenv("SIGN_WAIT_MS", "2000"))
 # Ensure dirs exist
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 os.makedirs(PERSISTENT_STORAGE_PATH, exist_ok=True)
@@ -269,6 +275,167 @@ def get_rfc3161_timestamp(file_path):
     return None
 
 # -------------------- PDF (single page, dynamic footer) --------------------
+from reportlab.pdfgen import canvas as pdfcanvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib.utils import ImageReader
+from PIL import Image as PILImage
+import io, os, traceback, tempfile
+
+def _load_image_reader(path_or_bytes):
+    try:
+        if isinstance(path_or_bytes, (bytes, bytearray)):
+            im = PILImage.open(io.BytesIO(path_or_bytes))
+        else:
+            im = PILImage.open(path_or_bytes)
+        if im.mode in ("P", "RGBA", "LA"):
+            im = im.convert("RGB")
+        w, h = im.size
+        bio = io.BytesIO()
+        im.save(bio, format="PNG")
+        bio.seek(0)
+        return ImageReader(bio), w, h
+    except Exception as e:
+        raise RuntimeError(f"Image load failed for {path_or_bytes}: {e}")
+
+def _fit_dims(iw, ih, max_w, max_h):
+    if iw <= 0 or ih <= 0:
+        return 0, 0
+    scale = min(max_w / float(iw), max_h / float(ih))
+    return iw * scale, ih * scale
+
+def generate_pdf(
+    stock, location, zip_code, url, utc_time, https_date_value,
+    price_path, pay_path, sha_price, sha_pay,
+    rfc_price=None, rfc_pay=None, debug_info="",
+    sign_image_path=None
+):
+    try:
+        page_w, page_h = letter
+        margin = 0.35 * inch
+        gap_small = 0.10 * inch
+        gap_img   = 0.20 * inch
+        title_h   = 0.25 * inch
+        meta_line_h = 0.16 * inch
+
+        if price_path and os.path.exists(price_path):
+            out_dir = os.path.dirname(price_path)
+        elif pay_path and os.path.exists(pay_path):
+            out_dir = os.path.dirname(pay_path)
+        else:
+            out_dir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
+
+        pdf_path = os.path.join(out_dir, f"cw_{stock}_report.pdf")
+        c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
+
+        def draw_wrapped(text, x, y, max_width, font="Helvetica", size=8, leading=11):
+            c.setFont(font, size)
+            words = (text or "").split()
+            line, used = "", 0
+            for w in words:
+                test = (line + " " + w).strip()
+                if c.stringWidth(test, font, size) <= max_width:
+                    line = test
+                else:
+                    c.drawString(x, y - used, line); used += leading; line = w
+            if line:
+                c.drawString(x, y - used, line); used += leading
+            return used
+
+        y = page_h - margin
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(margin, y, "Camping World Compliance Capture Report")
+        y -= title_h
+
+        c.setFont("Helvetica", 8)
+        max_text = page_w - 2 * margin
+        meta = [
+            f"Stock: {stock}",
+            f"Location: {location} (ZIP: {zip_code})",
+            f"URL: {url or 'N/A'}",
+            f"Capture Time (UTC): {utc_time}",
+            f"HTTPS Date: {https_date_value or 'N/A'}",
+        ]
+        for line in meta:
+            if line.startswith("URL: "):
+                y -= draw_wrapped(line, margin, y, max_text, size=8, leading=11)
+            else:
+                c.drawString(margin, y, line); y -= meta_line_h
+        y -= gap_small
+
+        price_ok = bool(price_path and os.path.exists(price_path))
+        pay_ok   = bool(pay_path and os.path.exists(pay_path))
+        items = []
+        if price_ok: items.append(("Price Disclosure", price_path))
+        if pay_ok:   items.append(("Payment Disclosure", pay_path))
+
+        c.setFont("Courier", 7)
+        footer_h = 0.35 * inch
+        if sha_price and sha_price != "N/A":
+            footer_h += 0.18 * inch
+        if sha_pay and sha_pay != "N/A":
+            footer_h += 0.18 * inch
+
+        avail_h = max(0, (y - margin) - footer_h)
+        max_img_w = page_w - 2 * margin
+
+        y_top = margin + footer_h + avail_h
+        y_cursor = y_top
+        for idx, (label, path) in enumerate(items):
+            try:
+                ir, iw, ih = _load_image_reader(path)
+            except Exception as e:
+                c.setFont("Helvetica", 8)
+                c.drawString(margin, y_cursor - 0.14*inch, f"({label} failed: {e})")
+                y_cursor -= 0.28*inch
+                continue
+
+            unit_h = avail_h if len(items) == 1 else max(avail_h / len(items) - gap_img/2, 0.5*inch)
+            dw, dh = _fit_dims(iw, ih, max_img_w, unit_h)
+            if dw <= 0 or dh <= 0:
+                continue
+            c.setFont("Helvetica", 8)
+            c.drawString(margin, y_cursor - 0.12*inch, label)
+            y_cursor -= 0.24*inch
+            c.drawImage(ir, margin, y_cursor - dh, width=dw, height=dh, mask='auto')
+            y_cursor -= dh
+            if idx < len(items)-1:
+                y_cursor -= gap_img
+
+        yf = margin + 0.18 * inch
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(margin, yf + 0.12 * inch, "SHA-256 Verification")
+        c.setFont("Courier", 7)
+        def fh(label, val, y):
+            txt = f"{label}: {val or 'N/A'}"
+            y -= 0.14 * inch
+            c.drawString(margin, y, txt)
+            return y
+        if sha_price and sha_price != "N/A":
+            yf = fh("Price Disclosure", sha_price, yf)
+        if sha_pay and sha_pay != "N/A":
+            yf = fh("Payment Disclosure", sha_pay, yf)
+
+        c.showPage()
+        if sign_image_path and os.path.exists(sign_image_path):
+            try:
+                ir, iw, ih = _load_image_reader(sign_image_path)
+                c.setFont("Helvetica-Bold", 14)
+                c.drawString(margin, page_h - margin - title_h, f"Store Sign — Stock #{stock}")
+                max_w, max_h = (page_w - 2*margin), (page_h - 2*margin - title_h - 0.15*inch)
+                dw, dh = _fit_dims(iw, ih, max_w, max_h)
+                y_img = (page_h - margin - title_h) - 0.20 * inch
+                c.drawImage(ir, margin, y_img - dh, width=dw, height=dh, mask='auto')
+            except Exception as e:
+                c.setFont("Helvetica", 9)
+                c.drawString(margin, page_h - margin - title_h - 0.3*inch, f"(Sign image failed: {e})")
+
+        c.save()
+        return pdf_path
+
+    except Exception:
+        traceback.print_exc()
+        return None
 
 def generate_pdf(
     stock, location, zip_code, url, utc_time, https_date_value,
@@ -313,7 +480,13 @@ def generate_pdf(
         else:
             tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
 
-        pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
+
+        # Capture Store Sign image for Page 2 (best-effort; ignore failures)
+        try:
+            sign_image_path = capture_sign_builder_image(stock, tmpdir)
+        except Exception:
+            sign_image_path = None
+            pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
         c = pdfcanvas.Canvas(pdf_path, pagesize=letter)
 
         # Helpers
@@ -464,8 +637,26 @@ def generate_pdf(
             y = draw_hash("Payment Disclosure", sha_pay, y)
 
         c.showPage()
+        # ----- Optional Page 2: Store Sign -----
+        try:
+            if sign_image_path and os.path.exists(sign_image_path):
+                c.setFont("Helvetica-Bold", 14)
+                c.drawString(margin, page_h - margin - title_h, f"Store Sign — Stock #{stock}")
+                try:
+                    sim = PILImage.open(sign_image_path)
+                    sw, sh = sim.width, sim.height
+                    max_w, max_h = (page_w - 2 * margin), (page_h - 2 * margin - title_h)
+                    scale = min(max_w / float(sw), max_h / float(sh))
+                    dw, dh = sw * scale, sh * scale
+                    img_y = (page_h - margin - title_h) - 0.20 * inch
+                    c.drawImage(sign_image_path, margin, img_y - dh, width=dw, height=dh, preserveAspectRatio=True, mask='auto')
+                except Exception as e:
+                    c.setFont("Helvetica", 9)
+                    c.drawString(margin, page_h - margin - title_h - 0.3 * inch, f"(Sign image failed to load: {e})")
+        except Exception as _:
+            pass
         c.save()
-        print(f"✓ PDF generated (one page, dynamic footer): {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
+        print(f"✓ PDF generated ({'two pages' if (sign_image_path and os.path.exists(sign_image_path)) else 'one page'}, dynamic footer): {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
         return pdf_path
 
     except Exception as e:
@@ -806,6 +997,47 @@ def do_capture(stock, zip_code, location_name, latitude, longitude):
         traceback.print_exc()
 
     return price_png_path, pay_png_path, final_url, "\n".join(all_debug)
+
+
+# -------------------- Sign Builder capture helper --------------------
+def capture_sign_builder_image(stock: str, out_dir: str = None):
+    """Open Sign Builder with ?stockNumber=<stock> and screenshot the .rv-sign-container element.
+    Saves PNG into out_dir (or a tempdir) and returns the file path. Returns None on failure.
+    """
+    try:
+        if out_dir is None:
+            out_dir = tempfile.mkdtemp(prefix=f"cw-sign-{stock}-")
+        os.makedirs(out_dir, exist_ok=True)
+        out_png = os.path.join(out_dir, f"cw_{stock}_sign.png")
+        url = f"{SIGN_BUILDER_BASE}/?stockNumber={stock}"
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = browser.new_context(viewport={"width": 1600, "height": 1800})
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle", timeout=60_000)
+            page.wait_for_timeout(SIGN_WAIT_MS)
+            selector = ".rv-sign-container"
+            el = None
+            try:
+                page.wait_for_selector(selector, state="visible", timeout=30_000)
+                el = page.query_selector(selector)
+            except Exception:
+                pass
+            if not el:
+                for sel in ["[data-testid='sign-canvas']", ".sign-preview", ".SignPreview", "canvas", "[data-test='sign-preview']"]:
+                    el = page.query_selector(sel)
+                    if el:
+                        break
+            if el:
+                el.screenshot(path=out_png, animations="disabled")
+            else:
+                page.screenshot(path=out_png, full_page=True)
+            context.close(); browser.close()
+        return out_png if os.path.exists(out_png) else None
+    except Exception as e:
+        print(f"⚠ Sign capture failed for stock {stock}: {e}")
+        return None
 
 # -------------------- Routes --------------------
 
@@ -1300,10 +1532,7 @@ def admin_backfill_tsa(capture_id):
                 sha_pay=row['payment_sha256'] or "N/A",
                 rfc_price=rfc_price,
                 rfc_pay=rfc_pay,
-                debug_info=row['debug_info']
-            )
-
-            if pdf_path and os.path.exists(pdf_path):
+                debug_info=row['debug_info'], sign_image_path=sign_path)if pdf_path and os.path.exists(pdf_path):
                 conn.execute("UPDATE captures SET pdf_path = ? WHERE id = ?", (pdf_path, capture_id))
                 return send_file(
                     pdf_path,
@@ -1686,3 +1915,59 @@ a{{color:#2563eb}}</style>
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT, debug=False)
+
+
+
+@app.get("/history_plus")
+def history_plus():
+    """
+    Simple history page with 'Print Unit Sign' action per row.
+    """
+    try:
+        with get_db() as conn:
+            rows = conn.execute("SELECT id, stock, location, zip_code, url, capture_utc, pdf_path FROM captures ORDER BY created_at DESC LIMIT 200").fetchall()
+    except Exception as e:
+        return Response(f"<h1>History error</h1><pre>{e}</pre>", mimetype="text/html", status=500)
+
+    html_head = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>History+</title>
+  <style>
+    body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;padding:24px;background:#f7f7fb}
+    table{border-collapse:collapse;width:100%;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06)}
+    th,td{padding:10px 12px;border-bottom:1px solid #eee;font-size:14px}
+    th{background:#fafafa;text-align:left;color:#374151}
+    tr:hover td{background:#fbfcff}
+    .btn{display:inline-block;padding:6px 10px;border-radius:6px;text-decoration:none;border:1px solid #d1d5db}
+    .btn-primary{background:#2563eb;color:#fff;border-color:#1d4ed8}
+    .btn:hover{filter:brightness(0.98)}
+    .muted{color:#6b7280;font-size:12px}
+  </style>
+</head>
+<body>
+  <h1 style="margin:0 0 12px 0;">History <span class="muted">(+ Print Unit Sign)</span></h1>
+  <table>
+    <tr>
+      <th>ID</th>
+      <th>Stock</th>
+      <th>Location</th>
+      <th>Captured</th>
+      <th>PDF</th>
+      <th>Action</th>
+    </tr>
+"""
+    html_rows = []
+    base = "https://rv-sign-builder-862473457030.us-central1.run.app"
+    for r in rows:
+        pdf_link = f'<a class="btn" href="/download?id={r["id"]}">Download</a>' if r["pdf_path"] else '<span class="muted">N/A</span>'
+        sign_link = f'{base}/?stockNumber={r["stock"]}'
+        html_rows.append(f"<tr><td>{r['id']}</td><td>{r['stock']}</td><td>{r['location']}</td><td>{r['capture_utc']}</td><td>{pdf_link}</td><td><a class='btn btn-primary' target='_blank' href='{sign_link}'>Print Unit Sign</a></td></tr>")
+    html_tail = """
+  </table>
+</body>
+</html>
+"""
+    return Response(html_head + "\n".join(html_rows) + html_tail, mimetype="text/html")
