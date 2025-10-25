@@ -1687,6 +1687,7 @@ from PyPDF2 import PdfMerger, PdfReader
 from playwright.sync_api import sync_playwright
 import io
 import os
+import tempfile
 
 def capture_sign_as_pdf(stock_number):
     with sync_playwright() as p:
@@ -1699,10 +1700,11 @@ def capture_sign_as_pdf(stock_number):
         screenshot_bytes = element.screenshot(type="png")
         browser.close()
     img = Image.open(io.BytesIO(screenshot_bytes)).convert("RGB")
-    img_pdf_bytes = io.BytesIO()
-    img.save(img_pdf_bytes, format='PDF')
-    img_pdf_bytes.seek(0)
-    return img_pdf_bytes
+    
+    # Save screenshot as a real PDF file (not just bytes)
+    temp_img_pdf_path = tempfile.mktemp(suffix=".pdf")
+    img.save(temp_img_pdf_path, "PDF")
+    return temp_img_pdf_path
 
 @app.route("/capture_merged_pdf", methods=["POST", "GET"])
 def capture_and_merge():
@@ -1711,13 +1713,18 @@ def capture_and_merge():
     output_pdf_path = request.values.get("outputPdf", "output.pdf")
     if not stock_number or not os.path.exists(existing_pdf_path):
         return jsonify({"error": "stockNumber and inputPdf file required"}), 400
-    sign_pdf = capture_sign_as_pdf(stock_number)
+
+    # Capture screenshot as a real PDF file
+    sign_pdf_path = capture_sign_as_pdf(stock_number)
+
+    # Merge: Always produces two pages, never overlays
     merger = PdfMerger()
-    with open(existing_pdf_path, 'rb') as existing:
-        merger.append(PdfReader(existing))
-    merger.append(PdfReader(sign_pdf))
-    with open(output_pdf_path, 'wb') as result:
-        merger.write(result)
+    merger.append(existing_pdf_path)
+    merger.append(sign_pdf_path)
+    merger.write(output_pdf_path)
+    merger.close()
+    os.remove(sign_pdf_path)  # Clean up temp file
+
     return send_file(output_pdf_path, mimetype="application/pdf", as_attachment=True, download_name=os.path.basename(output_pdf_path))
 
 # -------------------- Entrypoint --------------------
