@@ -2,10 +2,7 @@
 import os, sys, hashlib, datetime, tempfile, traceback, requests, time, re
 from flask import Flask, request, send_from_directory, Response, render_template_string, send_file, jsonify
 from playwright.sync_api import sync_playwright
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_LEFT, TA_CENTER
 from PIL import Image as PILImage
 import sqlite3
 from contextlib import contextmanager
@@ -258,7 +255,7 @@ def get_rfc3161_timestamp(file_path):
     print(f"  ✗ All TSAs failed for {os.path.basename(file_path)}")
     return None
 
-# -------------------- PDF (single page) --------------------
+# -------------------- PDF (single page, dynamic footer) --------------------
 
 def generate_pdf(
     stock, location, zip_code, url, utc_time, https_date_value,
@@ -269,7 +266,6 @@ def generate_pdf(
     try:
         from reportlab.pdfgen import canvas as pdfcanvas
         from reportlab.lib.pagesizes import letter
-        from reportlab.lib.units import inch
 
         page_w, page_h = letter
         margin = 0.35 * inch
@@ -369,7 +365,6 @@ def generate_pdf(
                     lines.append(f"  Info: {data['cert_info']}")
                 total = 0
                 for ln in lines:
-                    # label lines are small; measure with Helvetica 8/leading=11
                     total += measure_wrapped_height(ln, max_text_width, font="Helvetica", size=8, leading=11)
                 return total + 2  # tiny spacer
 
@@ -446,8 +441,6 @@ def generate_pdf(
                 scaled = [(label, path, w * shrink, h * shrink) for (label, path, w, h) in scaled]
 
             # Draw images top-down within the image area
-            # y now points to top of the image area
-            # ensure y doesn't go below margin + footer_needed
             y_top_images = margin + footer_needed + available_for_imgs
             y = y_top_images
             for idx, (label, path, dw, dh) in enumerate(scaled):
@@ -465,8 +458,7 @@ def generate_pdf(
             y = margin + footer_needed + 0.02 * inch
             c.setFont("Helvetica-Oblique", 9)
             c.drawString(margin, y, "No screenshots available for this capture.")
-            y += 0.20 * inch  # keep message close to bottom area header
-            # Reset y to top of image area (which is just above footer)
+            y += 0.20 * inch
             y = margin + footer_needed + available_for_imgs
 
         # ---- FOOTER: SHA-256 ----
@@ -656,7 +648,7 @@ def find_and_trigger_tooltip(page, label_text, tooltip_name):
                                 setTimeout(() => {{
                                     ['mouseenter','mouseover','mousemove','click'].forEach(t => {{
                                         svg.dispatchEvent(new MouseEvent(t, {{bubbles:true,cancelable:true,view:window}}));
-                                    }});
+                                    }}); 
                                 }}, 500);
                                 return true;
                             }}
@@ -684,7 +676,7 @@ def find_and_trigger_tooltip(page, label_text, tooltip_name):
 
     except Exception as e:
         debug.append(f"❌ Critical Error: {str(e)}")
-        traceback.print_exc()
+        traceback.print_exc())
         return False, "\n".join(debug)
 
 # -------------------- Capture Core --------------------
@@ -1129,6 +1121,7 @@ def admin_dashboard():
               <td>{{capture.capture_utc}}</td>
               <td>
                 <a href="/view/{{capture.id}}?force=1" class="btn" style="padding: 6px 12px; font-size: 12px;">Force PDF</a>
+                <a href="/view/{{capture.id}}?force=1&restamp=1" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12px; margin-left:8px;">Restamp + PDF</a>
               </td>
             </tr>
             {% endfor %}
@@ -1484,32 +1477,34 @@ def view_capture(capture_id):
     rfc_price = {'timestamp': capture['price_timestamp'], 'tsa': capture['price_tsa'], 'cert_info': None} if capture['price_tsa'] else None
     rfc_pay   = {'timestamp': capture['payment_timestamp'], 'tsa': capture['payment_tsa'], 'cert_info': None} if capture['payment_tsa'] else None
 
-    if restamp:
-        updated = {}
-        try:
-            if price_path:
-                new_price = get_rfc3161_timestamp(price_path)
-                if new_price:
-                    rfc_price = new_price
-                    updated["price_tsa"] = new_price["tsa"]
-                    updated["price_timestamp"] = new_price["timestamp"]
-        except Exception as e:
-            print(f"⚠ restamp price failed: {e}")
-        try:
-            if pay_path:
-                new_pay = get_rfc3161_timestamp(pay_path)
-                if new_pay:
-                    rfc_pay = new_pay
-                    updated["payment_tsa"] = new_pay["tsa"]
-                    updated["payment_timestamp"] = new_pay["timestamp"]
-        except Exception as e:
-            print(f"⚠ restamp payment failed: {e}")
+    # --- AUTO-STAMP SAFETY NET: If missing OR explicitly requested via restamp, stamp now (when file exists) ---
+    updated = {}
+    try:
+        if (restamp or not rfc_price) and price_path:
+            new_price = get_rfc3161_timestamp(price_path)
+            if new_price:
+                rfc_price = new_price
+                updated["price_tsa"] = new_price["tsa"]
+                updated["price_timestamp"] = new_price["timestamp"]
+    except Exception as e:
+        print(f"⚠ auto-stamp price failed: {e}")
 
-        if updated:
-            with get_db() as conn:
-                set_clause = ", ".join([f"{k} = ?" for k in updated.keys()])
-                vals = list(updated.values()) + [capture_id]
-                conn.execute(f"UPDATE captures SET {set_clause} WHERE id = ?", vals)
+    try:
+        if (restamp or not rfc_pay) and pay_path:
+            new_pay = get_rfc3161_timestamp(pay_path)
+            if new_pay:
+                rfc_pay = new_pay
+                updated["payment_tsa"] = new_pay["tsa"]
+                updated["payment_timestamp"] = new_pay["timestamp"]
+    except Exception as e:
+        print(f"⚠ auto-stamp payment failed: {e}")
+
+    if updated:
+        with get_db() as conn:
+            set_clause = ", ".join([f"{k} = ?" for k in updated.keys()])
+            vals = list(updated.values()) + [capture_id]
+            conn.execute(f"UPDATE captures SET {set_clause} WHERE id = ?", vals)
+    # --- end auto-stamp safety net ---
 
     try:
         pdf_path = generate_pdf(
