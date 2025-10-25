@@ -1686,36 +1686,42 @@ def admin_backfill_tsa(capture_id):
                 conn.execute(f"UPDATE captures SET {set_clause} WHERE id = ?", vals)
 
             
-# ---- Sign page capture (added) ----
-sign_path = None
-try:
-    base_dir = os.path.dirname(price_path) if price_ok else (os.path.dirname(pay_path) if pay_ok else tempfile.mkdtemp(prefix=f"cw-sign-{stock}-"))
-    sign_path = capture_sign_builder_image(stock, base_dir)
-except Exception:
-    sign_path = None  # non-fatal
-pdf_path = generate_pdf(
-    stock=row['stock'],
-    location=row['location'],
-    zip_code=row['zip_code'],
-    url=row['url'],
-    utc_time=row['capture_utc'],
-    https_date_value=row['https_date'],
-    price_path=price_path,
-    pay_path=pay_path,
-    sha_price=row['price_sha256'] or "N/A",
-    sha_pay=row['payment_sha256'] or "N/A",
-    rfc_price=rfc_price,
-    rfc_pay=rfc_pay,
-    debug_info=row['debug_info'],
-    sign_image_path=sign_path
-)
+        # ---- Sign page capture (added) ----
+        sign_path = None
+        try:
+            base_dir = os.path.dirname(price_path) if price_ok else (os.path.dirname(pay_path) if pay_ok else tempfile.mkdtemp(prefix=f"cw-sign-{stock}-"))
+            sign_path = capture_sign_builder_image(stock, base_dir)
+        except Exception:
+            sign_path = None  # non-fatal
+        
+        pdf_path = generate_pdf(
+            stock=row['stock'],
+            location=row['location'],
+            zip_code=row['zip_code'],
+            url=row['url'],
+            utc_time=row['capture_utc'],
+            https_date_value=row['https_date'],
+            price_path=price_path,
+            pay_path=pay_path,
+            sha_price=row['price_sha256'] or "N/A",
+            sha_pay=row['payment_sha256'] or "N/A",
+            rfc_price=rfc_price,
+            rfc_pay=rfc_pay,
+            debug_info=row['debug_info'],
+            sign_image_path=sign_path
+        )
+        
+        if pdf_path and os.path.exists(pdf_path):
+            conn.execute("UPDATE captures SET pdf_path = ? WHERE id = ?", (pdf_path, capture_id))
+            return send_file(
+                pdf_path,
+                mimetype="application/pdf",
+                as_attachment=True,
+                download_name=f"CW_Capture_{row['stock']}_{capture_id}.pdf"
+            )
+        
+        return jsonify({"ok": True, "message": "timestamps updated, but PDF could not be regenerated"}), 200
 
-if pdf_path and os.path.exists(pdf_path):
-    conn.execute("UPDATE captures SET pdf_path = ? WHERE id = ?", (pdf_path, capture_id))
-    return send_file(
-        pdf_path,
-        mimetype="application/pdf",
-        as_attachment=True,
         download_name=f"CW_Capture_{row['stock']}_{capture_id}.pdf"
     )
 
