@@ -440,7 +440,7 @@ def generate_pdf(
 
         # === Footer: SHA-256 only (no RFC) ===
         # Position SHA section at bottom with proper spacing
-        sha_section_bottom = margin + 0.3 * inch  # Increased from 0.2 to 0.3 for clearance
+        sha_section_bottom = margin  # CORRECT - uses the footer_needed space
         sha_section_top = sha_section_bottom + hashes_h
         
         # Draw SHA section
