@@ -950,63 +950,53 @@ a{{color:#2563eb}}</style>
 def generate_pdf(stock, location, zip_code, url, utc_time, https_date, 
                  price_path, pay_path, sha_price, sha_pay, 
                  rfc_price, rfc_pay, debug_info):
-    """Generate PDF report with screenshots side by side"""
+    """Generate PDF report with screenshots stacked on one page"""
     try:
         if price_path:
             tmpdir = os.path.dirname(price_path)
         elif pay_path:
             tmpdir = os.path.dirname(pay_path)
         else:
-            # This case handles if a "Not Found" capture failed to get a screenshot
-            # or if some other unknown error occurred.
             tmpdir = tempfile.mkdtemp(prefix=f"cw-{stock}-")
-        
+
         pdf_path = os.path.join(tmpdir, f"cw_{stock}_report.pdf")
         print(f"📄 Generating PDF at: {pdf_path}")
-        
-        doc = SimpleDocTemplate(pdf_path, pagesize=letter,
+
+        # Load images and compute dimensions
+        from PIL import Image as PILImage
+        img1 = PILImage.open(price_path) if price_path and os.path.exists(price_path) else None
+        img2 = PILImage.open(pay_path) if pay_path and os.path.exists(pay_path) else None
+
+        h1 = img1.height if img1 else 0
+        h2 = img2.height if img2 else 0
+        w1 = img1.width if img1 else 0
+        w2 = img2.width if img2 else 0
+
+        max_width = max(w1, w2)
+        total_height = h1 + h2
+
+        pdf_width = max_width * 0.75 + inch  # add 0.5 inch margins on both sides
+        pdf_height = total_height * 0.75 + inch
+
+        doc = SimpleDocTemplate(pdf_path, pagesize=(pdf_width, pdf_height),
                                leftMargin=0.5*inch, rightMargin=0.5*inch,
                                topMargin=0.5*inch, bottomMargin=0.5*inch)
-        
+
         story = []
         styles = getSampleStyleSheet()
-        
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=18,
-            textColor=colors.HexColor('#003087'),
-            spaceAfter=12,
-            alignment=TA_CENTER
-        )
-        
-        not_found_style = ParagraphStyle(
-            'NotFound',
-            parent=styles['Normal'],
-            fontSize=11,
-            textColor=colors.HexColor('#991b1b'), # dark red
-            borderColor=colors.HexColor('#f87171'), # red
-            borderWidth=1,
-            borderPadding=12,
-            borderRadius=8,
-            backgroundColor=colors.HexColor('#fef2f2'), # light red
-            spaceAfter=16,
-            alignment=TA_CENTER,
-            leading=14
-        )
-        
-        story.append(Paragraph("Camping World Compliance Capture Report", title_style))
-        story.append(Spacer(1, 0.2*inch))
-        
+
+        story.append(Paragraph("Camping World Compliance Capture Report", styles['Heading1']))
+        story.append(Spacer(1, 0.25 * inch))
+
         meta_data = [
             ['Stock Number:', stock],
             ['Location:', f"{location} (ZIP: {zip_code})"],
-            ['URL:', url], # This now reflects the *final* captured URL
+            ['URL:', url],
             ['Capture Time (UTC):', utc_time],
             ['HTTPS Date:', https_date or 'N/A'],
         ]
-        
-        meta_table = Table(meta_data, colWidths=[2*inch, 5*inch])
+
+        meta_table = Table(meta_data, colWidths=[2 * inch, 5 * inch])
         meta_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f3f4f6')),
             ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
@@ -1017,129 +1007,29 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
         story.append(meta_table)
-        story.append(Spacer(1, 0.2*inch))
-        
-        is_not_found = "NOT_FOUND_CAPTURE=TRUE" in (debug_info or "")
-        
-        if is_not_found:
-            story.append(Paragraph(
-                "<b>Stock Number Not Found Online</b><br/><br/>"
-                "The current stock number is not being advertised online or the page was not found at the time of capture. "
-                "This report serves as a record that no online pricing was available to a customer.",
-                not_found_style
-            ))
-        
-        if rfc_price or rfc_pay:
-            story.append(Paragraph("Cryptographic Timestamps (RFC 3161)", styles['Heading2']))
-            ts_data = []
-            if rfc_price:
-                # --- MODIFIED: Change label if it's a "Not Found" screenshot ---
-                label = "'Not Found' Screenshot:" if is_not_found else "Price Disclosure:"
-                ts_data.append([label, f"{rfc_price['timestamp']} | TSA: {rfc_price['tsa']}"])
-            if rfc_pay:
-                ts_data.append(['Payment Disclosure:', f"{rfc_pay['timestamp']} | TSA: {rfc_pay['tsa']}"])
-            
-            ts_table = Table(ts_data, colWidths=[2*inch, 5*inch])
-            ts_table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#ecfdf5')),
-                ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
-                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 8),
-                ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#10b981')),
-            ]))
-            story.append(ts_table)
-            story.append(Spacer(1, 0.2*inch))
-        
+        story.append(Spacer(1, 0.2 * inch))
+
         story.append(Paragraph("Captured Disclosures", styles['Heading2']))
-        story.append(Spacer(1, 0.1*inch))
-        
-        # Price Disclosure (Top)
-        if price_path and os.path.exists(price_path):
-            try:
-                if is_not_found:
-                    story.append(Paragraph("<b>'Not Found' Page Screenshot</b>", styles['Normal']))
-                else:
-                    story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
-                
-                story.append(Spacer(1, 0.05*inch))
-                
-                img = PILImage.open(price_path)
-                # Full width for better readability
-                img_width = 7*inch
-                aspect = img.height / img.width
-                target_height = img_width * aspect
-                
-                # Limit height to fit on page
-                if target_height > 3.5*inch:
-                    target_height = 3.5*inch
-                    img_width = target_height / aspect
-                
-                img_obj = Image(price_path, width=img_width, height=target_height)
-                
-                # Center the image
-                img_table = Table([[img_obj]], colWidths=[7*inch])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-                ]))
-                story.append(img_table)
-                story.append(Spacer(1, 0.15*inch))
-            except Exception as e:
-                print(f"⚠ Error processing price image: {e}")
-                story.append(Paragraph("Price disclosure available but could not render", styles['Normal']))
-                story.append(Spacer(1, 0.15*inch))
-        
-        elif not is_not_found: # Only show this if it's NOT a "not found" capture
-            story.append(Paragraph("<b>Price Disclosure</b>", styles['Normal']))
-            story.append(Spacer(1, 0.05*inch))
-            story.append(Paragraph("Price disclosure not available", styles['Normal']))
-            story.append(Spacer(1, 0.15*inch))
-        
-        # Payment Disclosure (Bottom)
-        if pay_path and os.path.exists(pay_path):
-            try:
-                story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
-                story.append(Spacer(1, 0.05*inch))
-                
-                img = PILImage.open(pay_path)
-                img_width = 7*inch
-                aspect = img.height / img.width
-                target_height = img_width * aspect
-                
-                if target_height > 3.5*inch:
-                    target_height = 3.5*inch
-                    img_width = target_height / aspect
-                
-                img_obj = Image(pay_path, width=img_width, height=target_height)
-                
-                img_table = Table([[img_obj]], colWidths=[7*inch])
-                img_table.setStyle(TableStyle([
-                    ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-                ]))
-                story.append(img_table)
-                story.append(Spacer(1, 0.15*inch))
-            except Exception as e:
-                print(f"⚠ Error processing payment image: {e}")
-                story.append(Paragraph("Payment disclosure available but could not render", styles['Normal']))
-                story.append(Spacer(1, 0.15*inch))
-        
-        elif not is_not_found: # Only show this if it's NOT a "not found" capture
-            story.append(Paragraph("<b>Payment Disclosure</b>", styles['Normal']))
-            story.append(Spacer(1, 0.05*inch))
-            story.append(Paragraph("Payment disclosure not available", styles['Normal']))
-            story.append(Spacer(1, 0.15*inch))
-        
+        story.append(Spacer(1, 0.1 * inch))
+
+        if img1:
+            story.append(Paragraph("Price Disclosure", styles['Normal']))
+            story.append(Image(price_path, width=w1 * 0.75, height=h1 * 0.75))
+            story.append(Spacer(1, 0.2 * inch))
+
+        if img2:
+            story.append(Paragraph("Payment Disclosure", styles['Normal']))
+            story.append(Image(pay_path, width=w2 * 0.75, height=h2 * 0.75))
+            story.append(Spacer(1, 0.2 * inch))
+
         story.append(Paragraph("SHA-256 Verification Hashes", styles['Heading2']))
-        
         hash_data = []
-        if is_not_found:
-            hash_data.append(["'Not Found' Screenshot:", sha_price])
-        else:
-            if sha_price != "N/A":
-                hash_data.append(['Price Disclosure:', sha_price])
-            if sha_pay != "N/A":
-                hash_data.append(['Payment Disclosure:', sha_pay])
-        
-        hash_table = Table(hash_data, colWidths=[2*inch, 5*inch])
+        if sha_price != "N/A":
+            hash_data.append(['Price Disclosure:', sha_price])
+        if sha_pay != "N/A":
+            hash_data.append(['Payment Disclosure:', sha_pay])
+
+        hash_table = Table(hash_data, colWidths=[2 * inch, 5 * inch])
         hash_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
             ('FONTNAME', (1, 0), (1, -1), 'Courier'),
@@ -1147,16 +1037,16 @@ def generate_pdf(stock, location, zip_code, url, utc_time, https_date,
             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
         ]))
         story.append(hash_table)
-        
+
         doc.build(story)
         print(f"✓ PDF generated successfully: {pdf_path} ({os.path.getsize(pdf_path)} bytes)")
         return pdf_path
-        
+
     except Exception as e:
         print(f"❌ PDF generation failed: {e}")
         traceback.print_exc()
         return None
-
+        
 def sha256_file(path):
     if not path or not os.path.exists(path): return "N/A"
     h = hashlib.sha256()
