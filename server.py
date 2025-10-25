@@ -356,10 +356,10 @@ def generate_pdf(
             max_text_width = page_w - 2 * margin
             if sha_price and sha_price != "N/A":
                 h += measure_wrapped_height(f"Price Disclosure: {sha_price}", max_text_width, font="Courier", size=7, leading=9)
-                h += 0.12 * inch  # Extra padding after each hash (increased)
+                h += 0.20 * inch  # Extra padding after each hash (increased)
             if sha_pay and sha_pay != "N/A":
                 h += measure_wrapped_height(f"Payment Disclosure: {sha_pay}", max_text_width, font="Courier", size=7, leading=9)
-                h += 0.12 * inch  # Extra padding after each hash (increased)
+                h += 0.20 * inch  # Extra padding after each hash (increased)
             h += 0.2 * inch  # Bottom padding (increased)
             return h
 
