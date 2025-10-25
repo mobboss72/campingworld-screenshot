@@ -124,7 +124,6 @@
       margin-bottom: 16px;
       color: var(--accent);
     }
-    /* How‑It‑Works steps */
     .steps {
       display: grid;
       gap: 48px;
@@ -147,26 +146,10 @@
       font-weight: 600;
       margin: 0 0 8px;
     }
-    /* Additional styles for floating CTA, dark mode toggle, fade‑in */
-    /* Floating CTA */
-    .floating-cta {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      background: var(--accent);
-      color: white;
-      padding: 14px 20px;
-      border-radius: 50px;
-      box-shadow: var(--shadow-md);
-      font-weight: 500;
-      z-index: 200;
-      text-decoration: none;
-      font-size: 15px;
-    }
-    /* Dark mode toggle */
+    /* Dark mode toggle styles and fade‑in animations */
     .theme-toggle {
       position: fixed;
-      bottom: 80px;
+      bottom: 24px;
       right: 24px;
       background: var(--bg-card);
       color: var(--text-primary);
@@ -177,7 +160,6 @@
       cursor: pointer;
       z-index: 200;
     }
-    /* Fade‑in animation */
     .fade-in {
       opacity: 0;
       transform: translateY(20px);
@@ -202,6 +184,32 @@
     footer a {
       color: var(--text-secondary);
       text-decoration: none;
+    }
+    .form-grid {
+      display: grid;
+      gap: 24px;
+      grid-template-columns: repeat(auto-fit, minmax(220px,1fr));
+    }
+    label {
+      display: flex;
+      flex-direction: column;
+      font-weight: 500;
+      font-size: 0.875rem;
+      color: var(--text-primary);
+    }
+    label input, label select {
+      margin-top: 8px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 1rem;
+      color: var(--text-primary);
+      background: var(--bg);
+    }
+    label input:focus, label select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(0,113,227,0.2);
     }
   </style>
 </head>
@@ -228,8 +236,21 @@
             <input type="url" name="url" required placeholder="https://">
           </label>
           <label>
+            Stock Number
+            <input type="text" name="stock_number" required placeholder="e.g., CW12345">
+          </label>
+          <label>
             Your Email
             <input type="email" name="email" required placeholder="you@company.com">
+          </label>
+          <label>
+            CW Location
+            <select name="location" required>
+              <option value="">Select location</option>
+              <option value="Seattle" selected>Seattle</option>
+              <option value="Portland">Portland</option>
+              <option value="Denver">Denver</option>
+            </select>
           </label>
         </div>
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top:24px;">
@@ -302,7 +323,6 @@
     <a href="/privacy">Privacy Policy</a> • <a href="/terms">Terms of Service</a>
   </footer>
 
-  <a href="#captureForm" class="floating-cta">📸 Run Capture</a>
   <button id="toggle-theme" class="theme-toggle">🌙 Toggle Theme</button>
 
   <script>
